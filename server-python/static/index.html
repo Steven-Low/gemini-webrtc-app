@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python SocketIO Example</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+</head>
+<body>
+    <h1>Python SocketIO Server</h1>
+    <p>Check the server console for connection messages.</p>
+    <script>
+        const socket = io({
+            query: {
+                callerId: 'myPythonUser' + Math.floor(Math.random() * 100)
+            }
+        });
+
+        socket.on('connect', () => {
+            console.log('Connected to Python SocketIO server!');
+        });
+
+        socket.on('my response', (data) => {
+            console.log('Server says:', data);
+        });
+
+        // You would implement your WebRTC logic here
+    </script>
+</body>
+</html>
