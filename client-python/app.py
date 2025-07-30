@@ -6,6 +6,7 @@ import os
 import random
 
 from aiortc import (
+    MediaStreamTrack,
     RTCPeerConnection,
     RTCConfiguration,
     RTCIceServer,
@@ -22,6 +23,10 @@ from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
 import base64
 import json
+import time
+import fractions
+import numpy as np
+
 
 load_dotenv()
 
@@ -54,9 +59,16 @@ GEMINI_SAMPLE_RATE = 16000
 CONF_CHAT_MODEL = "gemini-2.0-flash-live-001"  
 API_VERSION = "v1beta"
 CONFIG_RESPONSE = {"response_modalities": ["AUDIO"]}
+WEBRTC_SAMPLE_RATE = 24000
+WEBRTC_TIME_BASE = fractions.Fraction(1, WEBRTC_SAMPLE_RATE)
+SAMPLES_PER_FRAME = int(WEBRTC_SAMPLE_RATE * 0.02) # 20ms frame
+BYTES_PER_SAMPLE = 2
+CHUNK_DURATION_MS = 20
+CHUNK_SIZE_BYTES = int((WEBRTC_SAMPLE_RATE * (CHUNK_DURATION_MS / 1000)) * BYTES_PER_SAMPLE) # This will be 960 bytes
 
 gemini_to_user_audio_queue = asyncio.Queue()
 user_to_gemini_audio_queue = asyncio.Queue()
+current_audio_buffer = bytearray()
 gemini_session_tasks = []
 
 
@@ -85,6 +97,46 @@ def answer_call(data):
     asyncio.create_task(sio.emit('answerCall', data))
     print(f"[Signaling] Sending answer to {data.get('callerId')}")
 
+ 
+class GeminiOutputTrack(AudioStreamTrack):
+    """
+    An audio track that streams audio FROM Gemini TO the user.
+    """
+    kind = "audio"
+
+    def __init__(self):
+        super().__init__()
+        self.samplerate = WEBRTC_SAMPLE_RATE
+        self.samples_per_frame = SAMPLES_PER_FRAME
+        self._start_time = time.time()
+        self._timestamp = 0
+
+    async def recv(self):
+        """
+        Pulls audio data from the queue, wraps it in an AudioFrame, and returns it.
+        This is called automatically by the WebRTC transport.
+        """
+        # Timestamping logic for smooth playback
+        wait_until = self._start_time + (self._timestamp + self.samples_per_frame) / self.samplerate
+        await asyncio.sleep(max(0, wait_until - time.time()))
+
+        try:
+            data_bytes = await gemini_to_user_audio_queue.get()
+
+            data_s16 = np.frombuffer(data_bytes, dtype=np.int16)
+            data_reshaped = data_s16.reshape(1, -1) # Reshape for PyAV mono
+
+            frame = AudioFrame.from_ndarray(data_reshaped, format='s16', layout='mono')
+            frame.pts = self._timestamp
+            frame.sample_rate = self.samplerate
+            frame.time_base = WEBRTC_TIME_BASE
+
+            self._timestamp += frame.samples
+            gemini_to_user_audio_queue.task_done()
+            return frame
+        except asyncio.CancelledError:
+            raise MediaStreamError
+
 async def cancel_gemini_tasks():
     global gemini_session_tasks
     if gemini_session_tasks:
@@ -98,6 +150,20 @@ async def cancel_gemini_tasks():
         while not gemini_to_user_audio_queue.empty():
             gemini_to_user_audio_queue.get_nowait()
 
+async def play_audio(full_audio_buffer: bytes):
+    """
+    Takes a large buffer of audio data, chops it into timed 20ms chunks,
+    and puts them onto the queue for the GeminiOutputTrack to consume.
+    """
+    print(f"[PLAYBACK] Starting playback of {len(full_audio_buffer)} bytes ({len(full_audio_buffer) / (WEBRTC_SAMPLE_RATE * BYTES_PER_SAMPLE):.2f}s).")
+    for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
+        chunk = full_audio_buffer[i:i + CHUNK_SIZE_BYTES]
+        if not chunk:
+            continue
+            
+        await gemini_to_user_audio_queue.put(chunk)
+
+
 async def receive_from_gemini_task(session):
     """
     Listens for responses from Gemini and puts audio data into the outgoing queue.
@@ -108,11 +174,12 @@ async def receive_from_gemini_task(session):
             turn = session.receive()
             async for response in turn:
                 if data := response.data:
-                    # The API provides audio chunks. We put them on the queue for the GeminiAudioTrack to consume.
-                    await gemini_to_user_audio_queue.put(data)
+                    current_audio_buffer.extend(data)
                 if text := response.text:
                     sys.stdout.write(f"\rGemini: {text}\n> ")
                     sys.stdout.flush()
+            await play_audio(bytes(current_audio_buffer))
+            current_audio_buffer.clear()
 
     except asyncio.CancelledError:
         print("Receive_from_gemini_task cancelled.")
@@ -253,12 +320,12 @@ async def create_peer_connection():
         # 'default:audio' with 'dshow' (Windows), 'avfoundation' (macOS), 'v4l2' (Linux for video, check for audio too)
         # Using format=None lets aiortc try to auto-detect.
 
-        local_player = MediaPlayer(MEDIA_SOURCE, format=None)
-        if not local_player.audio:
-            raise Exception("Could not open local audio device.")
+        # local_player = MediaPlayer(MEDIA_SOURCE, format=None)
+        # if not local_player.audio:
+        #     raise Exception("Could not open local audio device.")
 
-        pc.addTrack(local_player.audio)
-        print("Added local audio track.")
+        pc.addTrack(GeminiOutputTrack())
+        print("Added Gemini live audio track.")
 
     except Exception as e:
         print(f"ERROR: Could not get local audio from '{MEDIA_SOURCE}'. Please check device or try a test audio file.")

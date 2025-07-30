@@ -15,15 +15,6 @@ from aiortc import (
 )
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 from aiortc.rtcrtpsender import RTCRtpSender
-from aiortc.contrib.media import MediaStreamError
-from google import genai
-from dotenv import load_dotenv
-from av.audio.frame import AudioFrame
-from av.audio.resampler import AudioResampler
-import base64
-import json
-
-load_dotenv()
 
 # --- Global Variables for State ---
 sio = socketio.AsyncClient()
@@ -49,17 +40,6 @@ recorder = None
 # Flag for media control
 local_mic_on = True
 
-
-GEMINI_SAMPLE_RATE = 16000
-CONF_CHAT_MODEL = "gemini-2.0-flash-live-001"  
-API_VERSION = "v1beta"
-CONFIG_RESPONSE = {"response_modalities": ["AUDIO"]}
-
-gemini_to_user_audio_queue = asyncio.Queue()
-user_to_gemini_audio_queue = asyncio.Queue()
-gemini_session_tasks = []
-
-
 # --- Utility Functions ---
 def set_other_user_id(user_id):
     global other_user_id
@@ -84,58 +64,6 @@ def answer_call(data):
     # This sends the SDP answer through the signaling server
     asyncio.create_task(sio.emit('answerCall', data))
     print(f"[Signaling] Sending answer to {data.get('callerId')}")
-
-
-async def send_to_gemini_task(session, track):
-    """
-    Receives audio from the user's track, resamples it, and sends it to Gemini.
-    """
-    print("Task started: Sending user audio to Gemini.")
-    resampler = AudioResampler(format="s16", layout="mono", rate=GEMINI_SAMPLE_RATE)
-    try:
-        while True:
-            print("11111111111111111")
-            frame = await track.recv()
-             
-            print("222222222222222")
-
-            resampled_frames = resampler.resample(frame)
-            for resampled_frame in resampled_frames:         
-                audio = resampled_frame.to_ndarray().tobytes()
-                b64_audio = base64.b64encode(audio).decode()
-
-                msg = {"data": audio,"mime_type": "audio/pcm"}
-
-                await session.send(input=msg) 
-                 
-    except MediaStreamError:
-        print("User audio track ended.")
-    except asyncio.CancelledError:
-        print("Send_to_gemini_task cancelled.")
-    except Exception as e:
-        print(f"Error in send_to_gemini_task: {e}")
-
-async def start_gemini_session_and_tasks(track):
-    """
-    Initializes the Gemini client and starts the concurrent send/receive tasks.
-    """
-    global gemini_session_tasks
-    print("Initializing Gemini Live API session...")
-    try:
-        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": API_VERSION})
-        async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=CONFIG_RESPONSE) as session:
-            print("Gemini LiveAPI connection established.")
-            # Start the two main tasks concurrently
-            send_task = asyncio.create_task(send_to_gemini_task(session, track))
-            # receive_task = asyncio.create_task(receive_from_gemini_task(session))
-            gemini_session_tasks = [send_task]
-            await asyncio.gather(*gemini_session_tasks)
-
-    except Exception as e:
-        print(f"Error during Gemini session lifecycle: {e}")
-    finally:
-        print("Gemini session has ended.")
-   
 
 # --- RTCPeerConnection Setup ---
 async def create_peer_connection():
@@ -202,17 +130,11 @@ async def create_peer_connection():
 
         if track.kind == "audio":
             remote_audio_track = track
-            print(f"Track type: {type(track)}")
-            print(f"Track module: {track.__class__.__module__}")
+            print("Remote audio track received. Saving to file...")
 
-
-
-            asyncio.create_task(start_gemini_session_and_tasks(track))
-
-            # print("Remote audio track received. Saving to file...")
-            # recorder = MediaRecorder(f"remote_audio_{other_user_id}.wav")  # Save to WAV file
-            # recorder.addTrack(track)
-            # await recorder.start()
+            recorder = MediaRecorder(f"remote_audio_{other_user_id}.wav")  # Save to WAV file
+            recorder.addTrack(track)
+            await recorder.start()
             print(f"Recording remote audio to remote_audio_{other_user_id}.wav")
 
  
