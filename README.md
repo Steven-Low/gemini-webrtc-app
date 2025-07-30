@@ -40,7 +40,34 @@ npm run start
 
 ---
 
-### Client Setup
+### Gemini Client Setup
+#### Step 1: Go to client-python folder
+```js
+cd react-native-webrtc-app/client-python
+```
+
+#### Step 2: Create & activate virtual python environment
+```
+python3 -m venv venv
+source ./venv/bin/activate
+```
+
+#### Step 3: Install the dependencies
+```
+pip install -r requirements.txt
+```
+
+#### Step 4: Set your Gemini api-key in .env file
+```
+GOOGLE_API_KEY=sk-xxxxx
+```
+
+#### Step 5: Run the Gemini client
+```
+python app.py
+```
+
+### User Client Setup
 
 #### Step 1: Go to client folder
 
