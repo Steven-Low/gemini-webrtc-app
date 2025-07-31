@@ -17,6 +17,7 @@ from aiortc import (
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 from aiortc.rtcrtpsender import RTCRtpSender
 from aiortc.contrib.media import MediaStreamError
+from google.genai import types
 from google import genai
 from dotenv import load_dotenv
 from av.audio.frame import AudioFrame
@@ -33,22 +34,11 @@ load_dotenv()
 # --- Global Variables for State ---
 sio = socketio.AsyncClient()
 pc = None  # RTCPeerConnection instance
-local_player = None # MediaPlayer for local audio source
 remote_audio_track = None
 
 caller_id =  "666666" #f"{random.randint(0,999999):06}" # Generate a random 6-char ID
 other_user_id = None
 remote_rtc_message = None
-
-# Media source for local stream (Audio Only)
-# 'default:audio' attempts to use your default microphone.
-# On Linux, you might need 'default:audio' or specific device names.
-# On Windows, 'default:audio' usually works with 'dshow' format.
-# If 'default:audio' doesn't work, you can try a test audio file like: 'test.wav'
-# Ensure 'test.wav' exists in the same directory for the test file option.
-MEDIA_SOURCE = "test.wav" #'default:audio'
-
-# Media recorder for remote stream (optional, for saving remote audio)
 recorder = None
 
 # Flag for media control
@@ -67,8 +57,6 @@ CHUNK_DURATION_MS = 20
 CHUNK_SIZE_BYTES = int((WEBRTC_SAMPLE_RATE * (CHUNK_DURATION_MS / 1000)) * BYTES_PER_SAMPLE) # This will be 960 bytes
 
 gemini_to_user_audio_queue = asyncio.Queue()
-user_to_gemini_audio_queue = asyncio.Queue()
-current_audio_buffer = bytearray()
 gemini_session_tasks = []
 
 
@@ -179,8 +167,6 @@ async def receive_from_gemini_task(session):
                     sys.stdout.write(f"\rGemini: {text}\n> ")
                     sys.stdout.flush()
 
- 
-
     except asyncio.CancelledError:
         print("Receive_from_gemini_task cancelled.")
     except Exception as e:
@@ -199,9 +185,11 @@ async def send_to_gemini_task(session, track):
             resampled_frames = resampler.resample(frame)
             for resampled_frame in resampled_frames:         
                 audio = resampled_frame.to_ndarray().tobytes()
-                b64_audio = base64.b64encode(audio).decode()   # ???
                 msg = {"data": audio,"mime_type": "audio/pcm"}
-                await session.send(input=msg) 
+                await session.send_realtime_input(
+                    audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000")
+                )
+                
                  
     except MediaStreamError:
         print("User audio track ended.")
@@ -234,7 +222,7 @@ async def start_gemini_session_and_tasks(track):
 
 # --- RTCPeerConnection Setup ---
 async def create_peer_connection():
-    global pc, local_player
+    global pc
 
     if pc:
         print("Closing existing peer connection.")
@@ -314,44 +302,24 @@ async def create_peer_connection():
         else:
             print(f"Ignoring non-audio track of kind: {track.kind}")
 
-    # Get local media (Audio Only)
     try:
-        # Use Media Player to capture audio from the default device
-        # 'default:audio' with 'dshow' (Windows), 'avfoundation' (macOS), 'v4l2' (Linux for video, check for audio too)
-        # Using format=None lets aiortc try to auto-detect.
-
-        # local_player = MediaPlayer(MEDIA_SOURCE, format=None)
-        # if not local_player.audio:
-        #     raise Exception("Could not open local audio device.")
-
         pc.addTrack(GeminiOutputTrack())
         print("Added Gemini live audio track.")
 
     except Exception as e:
-        print(f"ERROR: Could not get local audio from '{MEDIA_SOURCE}'. Please check device or try a test audio file.")
         print(f"Error details: {e}")
-        # Fallback if no audio device/file works, though connection will be silent
-        print("Continuing without local audio. Remote audio might still work if peer sends.")
-        local_player = None # Ensure player is None if it failed
 
     print("RTCPeerConnection created and local audio added (if successful).")
     return pc
 
 async def cleanup_webrtc():
-    global pc, local_player, recorder, remote_audio_track
+    global pc, recorder, remote_audio_track
     if pc:
         try:
             await pc.close()
         except Exception as e:
             print(f"Error closing peer connection: {e}")
         pc = None
-    
-    if local_player:
-        try:
-            local_player._stop() # Close MediaPlayer
-        except Exception as e:
-            print(f"Error closing local media player: {e}")
-        local_player = None
 
     if recorder:
         try:
@@ -391,8 +359,10 @@ async def newCall(data):
     other_user_id = data.get('callerId')
     remote_rtc_message = data.get('rtcMessage')
 
-    print(f"Call from: {other_user_id}")
-    print("Type 'accept' to answer or 'reject' to decline.")
+    print(f"Call from: {other_user_id}. Auto answered.")
+    await accept_call_process()
+
+    # print("Type 'accept' to answer or 'reject' to decline.")
 
 @sio.event
 async def callAnswered(data):
@@ -522,13 +492,9 @@ async def show_main_menu():
 
 async def toggle_mic():
     global local_mic_on
-    if local_player and local_player.audio:
-        local_mic_on = not local_mic_on
-        local_player.audio.enabled = local_mic_on
-        print(f"Microphone is now {'ON' if local_mic_on else 'OFF'}")
-    else:
-        print("Local audio stream not available from player.")
+    local_mic_on = not local_mic_on
 
+    print(f"Microphone is now {'ON' if local_mic_on else 'OFF'}")
 
 async def input_loop():
     while True:
