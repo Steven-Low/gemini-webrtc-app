@@ -162,7 +162,7 @@ async def play_audio(full_audio_buffer: bytes):
             continue
             
         await gemini_to_user_audio_queue.put(chunk)
-
+        await asyncio.sleep(CHUNK_DURATION_MS / 1000) # IMPORTANT! Wait for 0.02 seconds 
 
 async def receive_from_gemini_task(session):
     """
@@ -175,7 +175,7 @@ async def receive_from_gemini_task(session):
             async for response in turn:
                 if data := response.data:
                     current_audio_buffer.extend(data)
-                if text := response.text:
+                elif text := response.text:
                     sys.stdout.write(f"\rGemini: {text}\n> ")
                     sys.stdout.flush()
             await play_audio(bytes(current_audio_buffer))

@@ -1,0 +1,12 @@
+version: '3.9'
+
+services:
+  web:
+    container_name: webrtc_signalling_server
+    build: .
+    ports:
+      - "3500:3500"
+    volumes:
+      - .:/app       # optional: enables live code editing during dev
+    environment:
+      - PORT=3500
