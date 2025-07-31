@@ -152,7 +152,7 @@ async def cancel_gemini_tasks():
 
 async def play_audio(full_audio_buffer: bytes):
     """
-    Takes a large buffer of audio data, chops it into timed 20ms chunks,
+    Takes a buffer of audio data, chops it into timed 20ms chunks,
     and puts them onto the queue for the GeminiOutputTrack to consume.
     """
     print(f"[PLAYBACK] Starting playback of {len(full_audio_buffer)} bytes ({len(full_audio_buffer) / (WEBRTC_SAMPLE_RATE * BYTES_PER_SAMPLE):.2f}s).")
@@ -174,12 +174,12 @@ async def receive_from_gemini_task(session):
             turn = session.receive()
             async for response in turn:
                 if data := response.data:
-                    current_audio_buffer.extend(data)
+                    await play_audio(bytes(data))
                 elif text := response.text:
                     sys.stdout.write(f"\rGemini: {text}\n> ")
                     sys.stdout.flush()
-            await play_audio(bytes(current_audio_buffer))
-            current_audio_buffer.clear()
+
+ 
 
     except asyncio.CancelledError:
         print("Receive_from_gemini_task cancelled.")
