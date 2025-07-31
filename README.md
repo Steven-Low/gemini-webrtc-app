@@ -1,5 +1,5 @@
 # Real Open Source WebRTC React Native App with Signalling
-Are you frustrated with all those paid api keys or plan? What the hell PipeCat by Daily? (Restrict my plan to 1000 hours per month?) I want my super intelligence AI to be slaved 24/7 and no bill!
+Are you frustrated with all those paid api keys or plan? What the hell PipeCat by Daily? (Restrict my plan to 168 hours per month?) I want my super intelligence AI to be slaved 24/7 and no bill!
 > Currently, still under heavy development :D
 
 <img src="./public/react-native-webrtc-app.jpeg" />
