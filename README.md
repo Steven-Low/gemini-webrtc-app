@@ -1,6 +1,9 @@
 # Real Open Source WebRTC React Native App with Signalling
 Are you frustrated with all those paid api keys or plan? What the hell PipeCat by Daily? (Restrict my plan to 168 hours per month?) I want my super intelligence AI to be slaved 24/7 and no bill!
-> Currently, still under heavy development :D
+
+> ### Why Choosing Gemini Live Api ?
+>- It is because the average fast response time can achieve < 0.5 seconds, almost identical to talking to someone and he or she respond (Not even considering the uhhh umm noise when they speak)
+>- Another cool reason is it is free! 🩷 Love you Goooooooogle.
 
 <img src="./public/react-native-webrtc-app.jpeg" />
 
