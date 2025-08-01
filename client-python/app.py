@@ -22,8 +22,6 @@ from google import genai
 from dotenv import load_dotenv
 from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
-import base64
-import json
 import time
 import fractions
 import numpy as np
@@ -386,6 +384,7 @@ async def callAnswered(data):
 @sio.event
 async def ICEcandidate(data):
     print(f"[Signaling] Received ICE candidate from {data.get('sender')}")
+    
     rtcMessage = data.get('rtcMessage')
     candidate = rtcMessage["candidate"].split()
 
@@ -400,8 +399,8 @@ async def ICEcandidate(data):
                     ip=candidate[4],
                     port=int(candidate[5]),
                     type=candidate[7],
-                    sdpMid=rtcMessage["id"],
-                    sdpMLineIndex=rtcMessage["label"]
+                    sdpMid=rtcMessage["sdpMid"],
+                    sdpMLineIndex=rtcMessage["sdpMLineIndex"]
                 )
             )
             print("Added remote ICE candidate.")

@@ -7,6 +7,9 @@ import {
   View,
   Text,
   TouchableOpacity,
+  StyleSheet,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import TextInputContainer from './components/TextInputContainer';
 import SocketIOClient from 'socket.io-client';
@@ -26,26 +29,20 @@ import VideoOff from './asset/VideoOff';
 import CameraSwitch from './asset/CameraSwitch';
 import IconContainer from './components/IconContainer';
 import InCallManager from 'react-native-incall-manager';
+const { width } = Dimensions.get('window');
 
 export default function App({}) {
   const [localStream, setlocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [type, setType] = useState('JOIN');
 
+  const [socket, setSocket] = useState(null);
+  const [socketAddress, setSocketAddress] = useState('http://10.10.10.124:3500');
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  
+  const otherUserId = useRef(null);
   const callerId = useMemo(
     () => Math.floor(100000 + Math.random() * 900000).toString(),
-    [],
-  );
-  const otherUserId = useRef(null);
-
-  const socket = useMemo(
-    () =>
-      SocketIOClient('http://10.10.10.124:3500', {
-        transports: ['websocket'],
-        query: {
-          callerId,
-        },
-      }),
     [],
   );
 
@@ -65,6 +62,21 @@ export default function App({}) {
   let remoteRTCMessage = useRef(null);
 
   useEffect(() => {
+    if (!socketAddress) return;
+    const newSocket = SocketIOClient(socketAddress, {
+      transports: ['websocket'],
+      query: { callerId },
+    });
+
+    setSocket(newSocket);
+    return () => {
+      newSocket.disconnect();
+    };
+  }, [socketAddress, callerId]);
+
+  useEffect(() => {
+    if (!socket) return;
+
     socket.on('newCall', data => {
       remoteRTCMessage.current = data.rtcMessage;
       otherUserId.current = data.callerId;
@@ -144,7 +156,7 @@ export default function App({}) {
       // BUG 2 FIX: Properly disconnect socket on component unmount
       socket.disconnect();
     };
-  }, []);
+  }, [socket]);
 
   useEffect(() => {
     InCallManager.start();
@@ -322,6 +334,24 @@ export default function App({}) {
                   </Text>
                 </TouchableOpacity>
               </View>
+              {/* Settings Button */}
+              <TouchableOpacity 
+                style={{
+                  position: 'absolute',
+                  top: 20,
+                  right: 20,
+                  backgroundColor: '#5568FE',
+                  paddingVertical: 10,
+                  paddingHorizontal: 15,
+                  borderRadius: 12,
+                  zIndex: 10, // Ensure it's above other elements
+                }} 
+                onPress={() => setIsMenuVisible(true)}>
+                <Text style={ {
+                  color: '#FFFFFF',
+                  fontWeight: 'bold',
+                }}>Settings</Text>
+              </TouchableOpacity>
             </>
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
@@ -553,16 +583,142 @@ export default function App({}) {
       );
   };
 
-  switch (type) {
-    case 'JOIN':
-      return JoinScreen();
-    case 'INCOMING_CALL':
-      return IncomingCallScreen();
-    case 'OUTGOING_CALL':
-      return OutgoingCallScreen();
-    case 'WEBRTC_ROOM':
-      return WebrtcRoomScreen();
-    default:
-      return null;
-  }
+    // Settings Menu Component
+  const SettingsMenu = ({ isVisible, onClose, onSave }) => {
+    const [tempAddress, setTempAddress] = useState(socketAddress);
+    const slideAnim = useRef(new Animated.Value(width)).current;
+
+    useEffect(() => {
+      Animated.timing(slideAnim, {
+        toValue: isVisible ? 0 : width,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    }, [isVisible, slideAnim]);
+
+    const handleSave = () => {
+      onSave(tempAddress);
+      onClose();
+    };
+
+    if (!isVisible) return null;
+
+    return (
+      <View style={{
+        position: 'absolute',
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 100,
+      }}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={{
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+          }} />
+        </TouchableWithoutFeedback>
+        <Animated.View style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          width: width * 0.75, // 75% of screen width
+          height: '100%',
+          backgroundColor: '#1A1C22',
+          padding: 20,
+          transform: [{ translateX: slideAnim }],
+        }}>
+          <View style={{
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 20,
+          }}>
+            <Text style={{
+              color: '#FFFFFF',
+              fontSize: 24,
+              fontWeight: 'bold',
+            }}>
+              Settings
+            </Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={{
+                color: '#5568FE',
+                fontSize: 16,
+              }}>
+                Close
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{
+              color: '#D0D4DD',
+              fontSize: 16,
+              marginBottom: 10,
+            }}>
+              Socket Server Address
+            </Text>
+            <TextInputContainer
+              placeholder={'e.g. http://10.10.10.1:3500'}
+              value={tempAddress}
+              setValue={setTempAddress}
+              keyboardType={'default'}
+            />
+            <TouchableOpacity
+              onPress={handleSave}
+              style={{
+                height: 50,
+                backgroundColor: '#5568FE',
+                justifyContent: 'center',
+                alignItems: 'center',
+                borderRadius: 12,
+                marginTop: 20,
+              }}>
+              <Text style={{
+                color: '#FFFFFF',
+                fontSize: 16,
+                fontWeight: 'bold',
+              }}>
+                Save
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </View>
+    );
+  };
+  
+  const renderScreen = () => {
+    let screen;
+    switch (type) {
+      case 'JOIN':
+        screen = JoinScreen();
+        break;
+      case 'INCOMING_CALL':
+        screen = IncomingCallScreen();
+        break;
+      case 'OUTGOING_CALL':
+        screen = OutgoingCallScreen();
+        break;
+      case 'WEBRTC_ROOM':
+        screen = WebrtcRoomScreen();
+        break;
+      default:
+        screen = null;
+    }
+    
+    return (
+      <View style={{ flex: 1 }}>
+        {screen}
+        <SettingsMenu
+          isVisible={isMenuVisible}
+          onClose={() => setIsMenuVisible(false)}
+          onSave={(newAddress) => {
+            setSocketAddress(newAddress);
+            setIsMenuVisible(false);
+          }}
+        />
+      </View>
+    );
+  };
+
+  return renderScreen();
+
 }

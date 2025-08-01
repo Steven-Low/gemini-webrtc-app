@@ -4,6 +4,7 @@ services:
   web:
     container_name: webrtc_signalling_server
     build: .
+    restart: unless-stopped
     ports:
       - "3500:3500"
     volumes:

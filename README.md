@@ -1,4 +1,4 @@
-# Real Open Source WebRTC React Native App with Signalling
+# Gemini WebRTC React Native App with Signalling
 Are you frustrated with all those paid api keys or plan? What the hell PipeCat by Daily? (Restrict my plan to 168 hours per month?) I want my super intelligence AI to be slaved 24/7 and no bill!
 
 > ### Why Choosing Gemini Live Api ?
