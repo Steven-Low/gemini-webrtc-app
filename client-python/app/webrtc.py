@@ -102,8 +102,8 @@ class WebRTCManager:
                     ip=candidate[4],
                     port=int(candidate[5]),
                     type=candidate[7],
-                    sdpMid=rtcMessage["id"],
-                    sdpMLineIndex=rtcMessage["label"]
+                    sdpMid=rtcMessage["sdpMid"],
+                    sdpMLineIndex=rtcMessage["sdpMLineIndex"]
                 )
             )
             print("Added remote ICE candidate.")
