@@ -46,22 +46,35 @@ class WebRTCManager:
         self.on_offer_created_callback = None
         self.on_answer_created_callback = None
         self.on_remote_track_callback = None
+        self.on_remote_video_track_callback = None
         self.on_connection_closed_callback = None
 
         self._setup_event_handlers()
+
+    async def _drain_track(self, track):
+        try:
+            while True:
+                await track.recv()  
+        except MediaStreamError:
+            print(f"Track {track.kind}:{track.id} ended.")
+        except asyncio.CancelledError:
+            pass 
         
     def _setup_event_handlers(self):
         @self.pc.on("icecandidate")
         async def on_ice_candidate(candidate):
-            # Correctly await the callback
             if candidate and self.on_ice_candidate_callback:
                 await self.on_ice_candidate_callback(candidate)
 
         @self.pc.on("track")
-        async def on_track(track):
-            if track.kind == "audio" and self.on_remote_track_callback:
-                await self.on_remote_track_callback(track)
-
+        async def on_track(track): 
+            if track.kind == "audio": 
+                if self.on_remote_track_callback:
+                    await self.on_remote_track_callback(track)
+            elif track.kind == "video":
+                if self.on_remote_video_track_callback:
+                    await self.on_remote_video_track_callback(track)
+     
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
             print(f"RTC Connection State: {self.pc.connectionState}")
@@ -73,7 +86,6 @@ class WebRTCManager:
         self.pc.addTrack(self.gemini_output_track)
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
-        # Correctly await the callback
         if self.on_offer_created_callback:
             await self.on_offer_created_callback(self.pc.localDescription)
 
@@ -82,7 +94,6 @@ class WebRTCManager:
         await self.pc.setRemoteDescription(RTCSessionDescription(**offer_sdp))
         answer = await self.pc.createAnswer()
         await self.pc.setLocalDescription(answer)
-        # Correctly await the callback
         if self.on_answer_created_callback:
             await self.on_answer_created_callback(self.pc.localDescription)
 

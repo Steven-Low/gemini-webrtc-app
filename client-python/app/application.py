@@ -30,6 +30,7 @@ class Application:
         self.webrtc_manager.on_answer_created_callback = self._handle_answer_created
         self.webrtc_manager.on_ice_candidate_callback = self._handle_ice_candidate
         self.webrtc_manager.on_remote_track_callback = self.gemini_manager.start_session
+        self.webrtc_manager.on_remote_video_track_callback = self.gemini_manager.start_video_processing
         self.webrtc_manager.on_connection_closed_callback = self.hang_up
         
     # --- Signalling Handler Methods ---

@@ -6,9 +6,10 @@ SIGNALING_SERVER_URL = "http://10.10.10.124:3500"
 
 # --- Gemini API ---
 GEMINI_SAMPLE_RATE = 16000
-CONF_CHAT_MODEL = "gemini-2.0-flash-live-001"   
-API_VERSION = "v1beta"
-CONFIG_RESPONSE = {"response_modalities": ["AUDIO"]}
+CONF_CHAT_MODEL = "gemini-2.0-flash-live-001"  # "gemini-live-2.5-flash-preview" # 
+GEMINI_API_VERSION = "v1alpha" #"v1beta"
+GEMINI_VOICE = "Kore"
+
 
 # --- WebRTC Audio ---
 WEBRTC_SAMPLE_RATE = 24000

@@ -278,7 +278,7 @@ async def create_peer_connection():
 
     @pc.on("track")
     async def on_track(track):
-        global remote_audio_track, recorder
+        global remote_audio_track 
         print(f"RTC => Track {track.kind} received from remote peer.")
 
         if track.kind == "audio":
