@@ -19,11 +19,15 @@ from config import (
     GEMINI_LANGUAGE
 )
 
-GEMINI_TOOLS = [{'google_search': {}}]
+GEMINI_TOOLS = [
+    {'google_search': {}}, 
+    {"code_execution": {}},
+
+]
 GEMINI_SYSTEM_PROMPT = """
 You are a helpful and knowledgeable assistant. You have access to the google_search tool to look up information. 
 However, you must not use this tool automatically. Before performing any search, always ask the user for permission or wait for explicit instructions.
-Only proceed with the search if the user clearly tells you to do so.
+Only proceed with the search if the user clearly tells you to do so. Answer in short and concise sentence.
 """
  
 class GeminiSessionManager:
@@ -53,25 +57,25 @@ class GeminiSessionManager:
         
         try: 
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
-            gemini_config = types.LiveConnectConfig(
-                response_modalities=['AUDIO'],
-                context_window_compression=(
-                    types.ContextWindowCompressionConfig(
-                        sliding_window=types.SlidingWindow(),
-                    )
-                ),
-                session_resumption=types.SessionResumptionConfig(
-                    handle=self.session_handle
-                ),
-                speech_config={
-                    "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
-                    "language_code": GEMINI_LANGUAGE
-                },
-                tools=GEMINI_TOOLS,
-                system_instruction=GEMINI_SYSTEM_PROMPT
-            )   
-
             while True:
+                gemini_config = types.LiveConnectConfig(
+                    response_modalities=['AUDIO'],
+                    context_window_compression=(
+                        types.ContextWindowCompressionConfig(
+                            sliding_window=types.SlidingWindow(),
+                        )
+                    ),
+                    session_resumption=types.SessionResumptionConfig(
+                        handle=self.session_handle
+                    ),
+                    speech_config={
+                        "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
+                        "language_code": GEMINI_LANGUAGE
+                    },
+                    tools=GEMINI_TOOLS,
+                    system_instruction=GEMINI_SYSTEM_PROMPT
+                )   
+                
                 if self.session_handle:
                     print(f"Attempting to resume session with handle: {self.session_handle}")
 
