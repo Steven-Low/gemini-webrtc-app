@@ -16,24 +16,15 @@ from config import (
     CHUNK_DURATION_MS,
     GEMINI_API_VERSION, 
     GEMINI_VOICE,
-
+    GEMINI_LANGUAGE
 )
 
- 
-CONFIG_RESPONSE = types.LiveConnectConfig(
-    response_modalities=['AUDIO'],
-    context_window_compression=(
-        # Configures compression with default parameters.
-        types.ContextWindowCompressionConfig(
-            sliding_window=types.SlidingWindow(),
-        )
-    ),
-    # speech_config= {
-    #     "language_code": "cmn-CN" 
-    # }
-    # speech_config={"voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}}}
-    # cmn-CN
-)
+GEMINI_TOOLS = [{'google_search': {}}]
+GEMINI_SYSTEM_PROMPT = """
+You are a helpful and knowledgeable assistant. You have access to the google_search tool to look up information. 
+However, you must not use this tool automatically. Before performing any search, always ask the user for permission or wait for explicit instructions.
+Only proceed with the search if the user clearly tells you to do so.
+"""
  
 class GeminiSessionManager:
     def __init__(self):
@@ -71,8 +62,14 @@ class GeminiSessionManager:
                 ),
                 session_resumption=types.SessionResumptionConfig(
                     handle=self.session_handle
-                )
-            )    
+                ),
+                speech_config={
+                    "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
+                    "language_code": GEMINI_LANGUAGE
+                },
+                tools=GEMINI_TOOLS,
+                system_instruction=GEMINI_SYSTEM_PROMPT
+            )   
 
             while True:
                 if self.session_handle:
@@ -151,7 +148,16 @@ class GeminiSessionManager:
                         if update.resumable and update.new_handle:
                             self.session_handle = update.new_handle
                             print("return update new handle")
-  
+
+                    # The model might generate and execute Python code to use Search
+                    if response.server_content:
+                        if model_turn := response.server_content.model_turn:
+                            for part in model_turn.parts:
+                                if part.executable_code:
+                                    print("Code:", part.executable_code.code)
+                                elif part.code_execution_result:
+                                    print("Output:", part.code_execution_result.output)
+
                     if response.server_content and response.server_content.turn_complete:
                         break
                         
@@ -177,5 +183,6 @@ class GeminiSessionManager:
             print("Send_to_gemini_task cancelled.")
         except Exception as e:
             print(f"Error in send_to_gemini_task: {e}")
+            self.failed = True
             raise
 
