@@ -29,6 +29,9 @@ import VideoOff from './asset/VideoOff';
 import CameraSwitch from './asset/CameraSwitch';
 import IconContainer from './components/IconContainer';
 import InCallManager from 'react-native-incall-manager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCallerId } from './Session';
+
 const { width } = Dimensions.get('window');
 
 export default function App({}) {
@@ -41,13 +44,10 @@ export default function App({}) {
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   
   const otherUserId = useRef(null);
-  const callerId = useMemo(
-    () => Math.floor(100000 + Math.random() * 900000).toString(),
-    [],
-  );
 
   const [localMicOn, setlocalMicOn] = useState(true);
-  const [localWebcamOn, setlocalWebcamOn] = useState(true);
+  const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
+  
 
   const peerConnection = useRef(
     new RTCPeerConnection({
@@ -60,6 +60,22 @@ export default function App({}) {
   );
 
   let remoteRTCMessage = useRef(null);
+
+  const callerId = useMemo(() => getCallerId(), []);
+
+  useEffect(() => {
+    const loadSocketAddress = async () => {
+      try {
+        const savedAddress = await AsyncStorage.getItem('SOCKET_ADDRESS');
+        if (savedAddress) {
+          setSocketAddress(savedAddress);
+        }
+      } catch (e) {
+        console.warn('Failed to load socket address', e);
+      }
+    };
+    loadSocketAddress();
+  }, []);
 
   useEffect(() => {
     if (!socketAddress) return;
@@ -117,18 +133,25 @@ export default function App({}) {
 
       mediaDevices
         .getUserMedia({
-          audio: true,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
           video: {
             mandatory: {
               minWidth: 500,
               minHeight: 300,
-              minFrameRate: 30,
+              minFrameRate: 20,
             },
             facingMode: isFront ? 'user' : 'environment',
             optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
           },
         })
         .then(stream => {
+          if (!localWebcamOn){
+            stream.getVideoTracks().forEach(track => (track.enabled = false));
+          }
           setlocalStream(stream);
           peerConnection.current.addStream(stream);
         });
@@ -710,8 +733,13 @@ export default function App({}) {
         <SettingsMenu
           isVisible={isMenuVisible}
           onClose={() => setIsMenuVisible(false)}
-          onSave={(newAddress) => {
-            setSocketAddress(newAddress);
+          onSave={async (newAddress) => {
+            try {
+              await AsyncStorage.setItem('SOCKET_ADDRESS', newAddress);
+              setSocketAddress(newAddress);
+            } catch (e) {
+              console.warn('Failed to save socket address', e);
+            }
             setIsMenuVisible(false);
           }}
         />
