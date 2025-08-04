@@ -10,7 +10,6 @@ from av.audio.resampler import AudioResampler
 from config import (
     GEMINI_SAMPLE_RATE, 
     CONF_CHAT_MODEL, 
-    WEBRTC_SAMPLE_RATE, 
     BYTES_PER_SAMPLE, 
     CHUNK_SIZE_BYTES,
     CHUNK_DURATION_MS,
@@ -19,13 +18,17 @@ from config import (
     GEMINI_LANGUAGE
 )
 
+from .homeassistant_api import turn_on_light, turn_off_light
+turn_on_the_lights = {'name': 'turn_on_the_lights'}
+turn_off_the_lights = {'name': 'turn_off_the_lights'}
+
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
-
+    {"function_declarations": [turn_on_the_lights, turn_off_the_lights]}
 ]
 GEMINI_SYSTEM_PROMPT = """
-You are a helpful and knowledgeable assistant. You have access to the google_search tool to look up information. 
+You are a helpful and knowledgeable English spoken assistant. You have access to the google_search tool to look up information. 
 However, you must not use this tool automatically. Before performing any search, always ask the user for permission or wait for explicit instructions.
 Only proceed with the search if the user clearly tells you to do so. Answer in short and concise sentence.
 """
@@ -75,7 +78,7 @@ class GeminiSessionManager:
                     tools=GEMINI_TOOLS,
                     system_instruction=GEMINI_SYSTEM_PROMPT
                 )   
-                
+
                 if self.session_handle:
                     print(f"Attempting to resume session with handle: {self.session_handle}")
 
@@ -148,10 +151,9 @@ class GeminiSessionManager:
                     
                     if response.session_resumption_update:
                         update = response.session_resumption_update
-                        print(f"Update Resumable: {update.resumable} Update Handle: {update.new_handle}")
+                        # print(f"Update Resumable: {update.resumable} Update Handle: {update.new_handle}")
                         if update.resumable and update.new_handle:
                             self.session_handle = update.new_handle
-                            print("return update new handle")
 
                     # The model might generate and execute Python code to use Search
                     if response.server_content:
@@ -161,6 +163,27 @@ class GeminiSessionManager:
                                     print("Code:", part.executable_code.code)
                                 elif part.code_execution_result:
                                     print("Output:", part.code_execution_result.output)
+                     
+                                    
+                    elif response.tool_call:
+                        function_responses = []
+                        for fc in response.tool_call.function_calls:
+
+                            if fc.name == "turn_on_the_lights":
+                                result = turn_on_light()
+                            elif fc.name == "turn_off_the_lights":
+                                result = turn_off_light()
+                            else:
+                                result = {"error": f"Unknown function: {fc.name}"}
+
+                            function_response = types.FunctionResponse(
+                                id=fc.id,
+                                name=fc.name,
+                                response={ "result": result}  
+                            )
+                            function_responses.append(function_response)
+
+                        await self.session.send_tool_response(function_responses=function_responses)
 
                     if response.server_content and response.server_content.turn_complete:
                         break
