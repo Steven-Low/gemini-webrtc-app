@@ -3,9 +3,16 @@ Are you frustrated with all those paid api keys or plan? What the hell PipeCat b
 
 <img src="./public/gemini-webrtc.png" />
 
-> ### Why Choosing Gemini Live Api ?
->- It is because the average fast response time can achieve < 0.5 seconds, almost identical to talking to someone and he or she respond (Not even considering the uhhh umm noise when they speak)
->- Another cool reason is it is free! 🩷 Love you Goooooooogle.
+> ### Why Choosing Gemini Live Api Plus Webrtc?
+>- **Fast Response Time < 0.5s** : Almost identical to talking or response to people in real
+>- **Integrated VAD**: Voice Activity Detection on gemini socket fast and accurate
+>- **Interrupt detection**: The response stream can be interrupted through VAD 
+>- **Free to use** : The live model can has at most 3 concurrent session lasting forever
+>- **Echo Cancellation**: The speaker and microphone will not interfere
+>- **Automatic Gain Control (AGC)**: Adjust the volume and output (from client side)
+>- **Noise Suppression**: Reduce background noise
+>- **Tool Use**: Both synchronous and asynchronous function calling is available
+>- ...
 
 
 ---
