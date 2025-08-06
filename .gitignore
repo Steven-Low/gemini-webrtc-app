@@ -1,4 +1,3 @@
-./client-python/.env
-./client-python/run.sh
+./client-gemini/.env
 .env
 
