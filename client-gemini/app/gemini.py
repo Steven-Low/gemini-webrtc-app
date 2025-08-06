@@ -63,8 +63,11 @@ class GeminiSessionManager:
         self.session = None
         self.tasks = []
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
+        self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
         self.session_handle = None
         self.failed = False
+
+        self.interrupt_enabled = True
 
     #TODO: Handle video frames
     async def start_video_processing(self, webrtc_track): 
@@ -114,8 +117,9 @@ class GeminiSessionManager:
                         
                         send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
                         receive_task = asyncio.create_task(self._receive_from_gemini_task())
-                        
-                        self.tasks = [send_task, receive_task]
+                        playback_task = asyncio.create_task(self._playback_manager_task())
+
+                        self.tasks = [send_task, receive_task, playback_task]
                         self.failed = False
                         await asyncio.gather(*self.tasks)
                          
@@ -152,6 +156,21 @@ class GeminiSessionManager:
 
         print("Gemini session cleaned up.")
 
+    async def _playback_manager_task(self):
+        """
+        A dedicated, permanent task that pulls raw audio buffers from a queue
+        and then calls the "slow" chunking function. This decouples playback
+        from the main receive loop.
+        """
+        print("Playback manager started.")
+        try:
+            while True:
+                raw_buffer = await self.raw_audio_to_play_queue.get()
+                await self._play_audio(raw_buffer)
+                self.raw_audio_to_play_queue.task_done()
+        except asyncio.CancelledError:
+            print("Playback manager cancelled.")
+
     async def _play_audio(self, full_audio_buffer: bytes):
         for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
             chunk = full_audio_buffer[i:i + CHUNK_SIZE_BYTES]
@@ -166,7 +185,8 @@ class GeminiSessionManager:
                 turn = self.session.receive()
                 async for response in turn:
                     if data := response.data:
-                        await self._play_audio(bytes(data))
+                        print(f"[Audio Bytes] {len(data)}")
+                        await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
                         sys.stdout.write(f"\rGemini: {text}\n> ")
                         sys.stdout.flush()
@@ -188,7 +208,13 @@ class GeminiSessionManager:
                                     print("Code:", part.executable_code.code)
                                 elif part.code_execution_result:
                                     print("Output:", part.code_execution_result.output)
-                     
+                                        
+                        if response.server_content.interrupted is self.interrupt_enabled:
+                            print("Interupting... Clearing audio queues.")
+                            while not self.raw_audio_to_play_queue.empty():
+                                self.raw_audio_to_play_queue.get_nowait()
+                            while not self.audio_playback_queue.empty():
+                                self.audio_playback_queue.get_nowait()
                                     
                     elif response.tool_call:
                         function_responses = []

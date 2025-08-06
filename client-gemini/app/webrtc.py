@@ -5,7 +5,7 @@ import numpy as np
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSessionDescription, RTCIceCandidate, AudioStreamTrack
 from aiortc.contrib.media import MediaStreamError
 from av.audio.frame import AudioFrame
-from config import ICE_SERVERS, WEBRTC_SAMPLE_RATE, SAMPLES_PER_FRAME, WEBRTC_TIME_BASE
+from config import CHUNK_DURATION_MS, ICE_SERVERS, WEBRTC_SAMPLE_RATE, SAMPLES_PER_FRAME, WEBRTC_TIME_BASE
 
 class GeminiOutputTrack(AudioStreamTrack):
     kind = "audio"
