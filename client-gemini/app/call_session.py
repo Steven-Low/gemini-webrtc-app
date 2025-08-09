@@ -1,4 +1,3 @@
-import asyncio
 from .webrtc import WebRTCManager
 from .gemini import GeminiSessionManager
 

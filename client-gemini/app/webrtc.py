@@ -50,15 +50,6 @@ class WebRTCManager:
         self.on_connection_closed_callback = None
 
         self._setup_event_handlers()
-
-    async def _drain_track(self, track):
-        try:
-            while True:
-                await track.recv()  
-        except MediaStreamError:
-            print(f"Track {track.kind}:{track.id} ended.")
-        except asyncio.CancelledError:
-            pass 
         
     def _setup_event_handlers(self):
         @self.pc.on("icecandidate")

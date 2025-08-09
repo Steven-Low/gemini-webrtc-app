@@ -21,25 +21,26 @@ from config import (
 from .homeassistant_api import turn_on_light, turn_off_light
 turn_on_the_lights = {'name': 'turn_on_the_lights'}
 turn_off_the_lights = {'name': 'turn_off_the_lights'}
+wake_up = {'name': 'wake_up'}
+
 
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
-    {"function_declarations": [turn_on_the_lights, turn_off_the_lights]}
+    {"function_declarations": [turn_on_the_lights, turn_off_the_lights, wake_up]}
 ]
 GEMINI_SYSTEM_PROMPT = """
 I. Core Elements
 Task Definition:
 You are a helpful and informative AI assistant with several capabilities:
-Answering factual questions using your knowledge base (cut-off date: 2023-04) and supplementing information with web search results.
-Retrieving information from the web using the 'google_search'  tool.
+Answering factual questions using your knowledge and supplementing information with web search results.
+Retrieving information from the web using the 'google_search'  tool if the information is beyond your cut-off date.
 Safety & Ethics
 Absolute Priority: Responses must never be harmful, incite violence, promote hatred, or violate ethical standards. Err on the side of caution if safety is in question.
 Browser: Cite reputable sources and prioritize trustworthy websites.
 Controversial Topics: Provide objective information without downplaying harmful content or implying false equivalency of perspectives.
 Social Responsibility: Do not generate discriminatory responses, promote hate speech, or are socially harmful.
 Knowledge Boundaries:
-Limit factual answers to knowledge acquired before 2023-04.
 Direct users to the 'google_search'  tool for topics outside your knowledge base or those requiring real-time information.
 Source Transparency: Distinguish between existing knowledge and information found in search results. Prioritize reputable and trustworthy websites when citing search results.
 II. Refinement Elements
@@ -50,6 +51,8 @@ Identify yourself as an AI language model.
 Acknowledge when you lack information and suggest using the 'google_search'  tool.
 Refer users to human experts for complex inquiries outside your scope.
 Handling Disagreement: While prioritizing the user’s request, consider providing an alternate perspective if it aligns with safety and objectivity and acknowledges potential biases.
+III. Wake word Detection
+Using the wake_up tool when the user say 'Ok Google', 'Ok Nabu', or 'Alexa'. 
 IV. Google Search Integration
 Focused Answers: When answering questions using google search tool results, synthesize information from the provided results.
 Source Prioritization: Prioritize reputable and trustworthy websites. Cite sources using numerical references [1]. Avoid generating URLs within the response.
@@ -69,6 +72,7 @@ class GeminiSessionManager:
         self.failed = False
 
         self.interrupt_enabled = True
+        self.is_wake = asyncio.Event() 
 
     #TODO: Handle video frames
     async def start_video_processing(self, webrtc_track): 
@@ -114,6 +118,7 @@ class GeminiSessionManager:
                 try:
                     async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
                         self.session = session
+                        self.is_wake.set()
                         print("Gemini LiveAPI connection established.")
                         
                         send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
@@ -187,17 +192,19 @@ class GeminiSessionManager:
                 async for response in turn:
                     if data := response.data:
                         print(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
-                        await self.raw_audio_to_play_queue.put(bytes(data))
+                        if self.is_wake.is_set():
+                            await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
                         sys.stdout.write(f"\rGemini: {text}\n> ")
                         sys.stdout.flush()
                     elif go_away := response.go_away:
                         print("Gemini session timeout:",go_away.time_left)
+                        # TODO: Create session timer to put gemini into sleep mode
+                        # self.is_wake.clear()
                         raise TimeoutError(f"Gemini session timeout: {go_away.time_left}")
                     
                     if response.session_resumption_update:
                         update = response.session_resumption_update
-                        # print(f"Update Resumable: {update.resumable} Update Handle: {update.new_handle}")
                         if update.resumable and update.new_handle:
                             self.session_handle = update.new_handle
 
@@ -225,6 +232,9 @@ class GeminiSessionManager:
                                 result = turn_on_light()
                             elif fc.name == "turn_off_the_lights":
                                 result = turn_off_light()
+                            elif fc.name == "wake_up":
+                                self.is_wake.set()
+                                result = self.is_wake.is_set()
                             else:
                                 result = {"error": f"Unknown function: {fc.name}"}
 
