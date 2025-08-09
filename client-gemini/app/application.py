@@ -19,6 +19,7 @@ class Application:
         self.signaling_client.on_new_call_callback = self.handle_incoming_call
         self.signaling_client.on_call_answered_callback = self.handle_call_answered
         self.signaling_client.on_ice_candidate_callback = self.handle_ice_candidate
+        self.signaling_client.on_call_ended_callback = self.handle_call_ended
 
     # --- Signaling Handler Methods ---
     async def handle_incoming_call(self, data):
@@ -47,6 +48,13 @@ class Application:
         if session:
             await session.webrtc_manager.handle_remote_answer(data.get('rtcMessage'))
 
+    async def handle_call_ended(self, data):
+        caller_id = data.get("senderId")
+        print(f"MAIN APP: Caller {caller_id} hung up before call connected.")
+        session = self.active_sessions.get(caller_id)
+        if session:
+            await session.cleanup() 
+
     async def handle_ice_candidate(self, data):
         # Find the correct session and delegate the ICE candidate
         sender_id = data.get('sender')
@@ -63,9 +71,31 @@ class Application:
         print(f"MAIN APP: Current active sessions: {len(self.active_sessions)}")
 
     async def start_call(self, target_id):
-        """Outbound calling is more complex now, focusing on inbound for this design."""
-        print("Outbound calling from the server is not implemented in this multi-session design.")
-        print("This server is designed to receive calls at its main ID.")
+        """Initiates an outbound call to a target user."""
+        print(f"MAIN APP: Attempting to start call to {target_id}.")
+
+        if target_id in self.active_sessions:
+            print(f"MAIN APP: Already in an active session with {target_id}. Cannot start a new call.")
+            return
+
+        if len(self.active_sessions) >= MAX_SESSIONS:
+            print(f"MAIN APP: At max capacity ({MAX_SESSIONS} calls). Cannot start a new call.")
+            return
+
+        print(f"MAIN APP: Creating new session for outbound call to {target_id}.")
+        session = CallSession(
+            remote_user_id=target_id,
+            signaling_client=self.signaling_client,
+            on_cleanup_callback=self.remove_session
+        )
+        self.active_sessions[target_id] = session
+        
+        try:
+            await session.initiate_call()
+            print(f"MAIN APP: Offer sent to {target_id}. Waiting for them to answer.")
+        except Exception as e:
+            print(f"MAIN APP: Failed to initiate call to {target_id}. Error: {e}")
+            await session.cleanup()
 
     async def hang_up(self, session_id_to_hang_up):
         """Hangs up a specific call by its ID."""

@@ -1,5 +1,5 @@
 import os
-from flask import Flask, send_from_directory, request  
+from flask import Flask, send_from_directory, request, jsonify
 from flask_socketio import SocketIO, join_room, emit, disconnect
 
 # Initialize Flask app
@@ -18,6 +18,11 @@ def serve_index():
 @app.route('/<path:path>')
 def serve_other_static_files(path):
     return send_from_directory(app.static_folder, path)
+
+# Route to expose current sid user map for debugging
+@app.route('/debug/sessions')
+def debug_sessions():
+    return jsonify(socketio.sid_to_user_map)
 
 # --- Socket.IO Event Handlers ---
 @socketio.on('connect')
@@ -90,6 +95,23 @@ def handle_answer_call(data):
         }, room=caller_id)
     else:
         print(f"Invalid 'answerCall' data received from {callee_id}: {data}")
+        
+@socketio.on('hangupCall')
+def handle_hangup_call(data):
+    """
+    Handles a 'hangupCall' event from a client (ending a call).
+    Notifies the other participant that the call has ended.
+    """
+    target_id = data.get('targetId')  
+    sender_id = socketio.sid_to_user_map.get(request.sid)
+
+    if target_id and sender_id:
+        print(f"'{sender_id}' hung up on '{target_id}'")
+        emit('callEnded', {
+            'senderId': sender_id
+        }, room=target_id)
+    else:
+        print(f"Invalid 'hangupCall' data from {sender_id}: {data}")
 
 
 @socketio.on('ICEcandidate')

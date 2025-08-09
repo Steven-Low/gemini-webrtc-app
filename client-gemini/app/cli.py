@@ -18,6 +18,7 @@ class CLIHandler:
         print("------------------------------------")
         print("Available Commands:")
         print("  status    - List all active call sessions.")
+        print("  call      - Start a new call to a remote user.") 
         print("  hangup    - Hang up a specific call session.")
         print("  menu      - Show this menu again.")
         print("  exit      - Shut down all sessions and exit.")
@@ -33,6 +34,9 @@ class CLIHandler:
 
                 if command == 'status':
                     self.show_status()
+                
+                elif command == 'call':
+                    await self.handle_start_call()
 
                 elif command == 'hangup':
                     await self.handle_hangup()
@@ -80,6 +84,21 @@ class CLIHandler:
                 print(f"  {i+1}. Session with Remote User: {session_id}")
         
         print("--------------------------")
+
+    async def handle_start_call(self):
+        """Handles the logic for initiating an outbound call."""
+        try:
+            target_id = await asyncio.to_thread(input, "Enter the Remote User ID to call: ")
+            target_id = target_id.strip()
+            if target_id:
+                # Delegate the call initiation to the main application
+                await self.app.start_call(target_id)
+            else:
+                print("Call cancelled. No ID entered.")
+        except (EOFError, KeyboardInterrupt):
+            print("\nCall cancelled.")
+            return
+
 
     async def handle_hangup(self):
         """Handles the logic for hanging up a specific session."""

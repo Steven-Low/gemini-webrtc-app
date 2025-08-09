@@ -107,6 +107,10 @@ export default function App({}) {
       setType('WEBRTC_ROOM');
     });
 
+    socket.on('callEnded', data => {
+      leave(notify=false)   
+    })
+
     socket.on('ICEcandidate', data => {
       let message = data.rtcMessage;
       if (peerConnection.current) {
@@ -176,7 +180,6 @@ export default function App({}) {
       socket.off('newCall');
       socket.off('callAnswered');
       socket.off('ICEcandidate');
-      // BUG 2 FIX: Properly disconnect socket on component unmount
       socket.disconnect();
     };
   }, [socket]);
@@ -224,12 +227,18 @@ export default function App({}) {
     socket.emit('call', data);
   }
 
-  // BUG 1 FIX: Rewritten `leave` function
-  function leave() {
-    // 1. Close existing connection
+  function hangupCall(data) {
+    socket.emit('hangupCall', data)
+  }
+
+  function leave(notify = true) {
+
+    // Signal hangup and close existing connection
+    if (notify == true)
+      hangupCall({targetId: otherUserId.current})
     peerConnection.current.close();
 
-    // 2. Create a new peer connection instance
+    // Create a new peer connection instance
     const newPeerConnection = new RTCPeerConnection({
       iceServers: [
         {urls: 'stun:stun.l.google.com:19302'},
@@ -238,7 +247,7 @@ export default function App({}) {
       ],
     });
 
-    // 3. Re-attach stream event handlers
+    // Re-attach stream event handlers
     newPeerConnection.onaddstream = event => {
       setRemoteStream(event.stream);
     };
@@ -254,21 +263,20 @@ export default function App({}) {
       }
     };
 
-    // 4. Add the existing local stream to the new connection
+    // Add the existing local stream to the new connection
     if (localStream) {
       newPeerConnection.addStream(localStream);
     }
     
-    // 5. Set the new connection to the ref
+    // Set the new connection to the ref
     peerConnection.current = newPeerConnection;
 
-    // 6. Reset UI state
+    // Reset UI state
     setRemoteStream(null);
     setType('JOIN');
   }
 
   const JoinScreen = () => {
-    // Unchanged...
     return (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

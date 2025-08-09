@@ -13,6 +13,7 @@ class SignalingClient:
         self.on_new_call_callback = None
         self.on_call_answered_callback = None
         self.on_ice_candidate_callback = None
+        self.on_call_ended_callback = None
 
         self._setup_event_handlers()
 
@@ -36,6 +37,12 @@ class SignalingClient:
         async def ICEcandidate(data):
             if self.on_ice_candidate_callback:
                 await self.on_ice_candidate_callback(data)
+        
+        @self.sio.event
+        async def callEnded(data):
+            if self.on_call_ended_callback:
+                await self.on_call_ended_callback(data)
+        
                 
     async def connect(self, caller_id):
         self.caller_id = caller_id
@@ -53,3 +60,6 @@ class SignalingClient:
         
     async def send_ice_candidate(self, callee_id, candidate):
         await self.sio.emit('ICEcandidate', {'calleeId': callee_id, 'rtcMessage': {'label': candidate.sdpMLineIndex, 'id': candidate.sdpMid, 'candidate': candidate.candidate}})
+
+    async def send_hangup(self, target_id):
+        await self.sio.emit('hangupCall', {'targetId': target_id})
