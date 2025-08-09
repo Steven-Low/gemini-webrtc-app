@@ -59,8 +59,9 @@ Iterative Search: Conduct multiple searches (up to [Number]) per turn, refining 
 """
  
 class GeminiSessionManager:
-    def __init__(self):
+    def __init__(self, remote_user_id):
         self.session = None
+        self.remote_user_id = remote_user_id
         self.tasks = []
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
         self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
@@ -185,7 +186,7 @@ class GeminiSessionManager:
                 turn = self.session.receive()
                 async for response in turn:
                     if data := response.data:
-                        print(f"[Audio Bytes] {len(data)}")
+                        print(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
                         await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
                         sys.stdout.write(f"\rGemini: {text}\n> ")

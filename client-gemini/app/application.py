@@ -1,93 +1,95 @@
-# app/application.py
 import asyncio
-import random
 from .signaling import SignalingClient
-from .webrtc import WebRTCManager
-from .gemini import GeminiSessionManager
+from .call_session import CallSession  
 from .cli import CLIHandler
+
+MAX_SESSIONS = 3 
 
 class Application:
     def __init__(self):
-        self.caller_id = f"666666"
-        self.remote_user_id = None
-        
-        self.gemini_manager = GeminiSessionManager()
-        self.webrtc_manager = WebRTCManager(self.gemini_manager.audio_playback_queue)
+        self.main_caller_id = "666666" # The public "reception" ID
+        self.active_sessions = {}      # Store active call session via remote user id key
         self.signaling_client = SignalingClient()
-        self.cli = CLIHandler(self)
-        
-        self._wire_components()
+        self.cli = CLIHandler(self)   
+        self._wire_signaling()
 
-    def _wire_components(self):
-        # Signaling -> App
-        self.signaling_client.on_connect_callback = lambda: print(f"Connected to signaling with ID: {self.caller_id}")
+    def _wire_signaling(self):
+        """Wires up the signaling client to the application's handlers."""
+        self.signaling_client.on_connect_callback = lambda: print(f"Connected to signaling. My main ID is: {self.main_caller_id}")
         self.signaling_client.on_new_call_callback = self.handle_incoming_call
-        self.signaling_client.on_call_answered_callback = self.webrtc_manager.handle_remote_answer
-        self.signaling_client.on_ice_candidate_callback = self.webrtc_manager.add_ice_candidate
+        self.signaling_client.on_call_answered_callback = self.handle_call_answered
+        self.signaling_client.on_ice_candidate_callback = self.handle_ice_candidate
 
-        # WebRTC -> App 
-        self.webrtc_manager.on_offer_created_callback = self._handle_offer_created
-        self.webrtc_manager.on_answer_created_callback = self._handle_answer_created
-        self.webrtc_manager.on_ice_candidate_callback = self._handle_ice_candidate
-        self.webrtc_manager.on_remote_track_callback = self.gemini_manager.start_session
-        self.webrtc_manager.on_remote_video_track_callback = self.gemini_manager.start_video_processing
-        self.webrtc_manager.on_connection_closed_callback = self.hang_up
-        
-    # --- Signalling Handler Methods ---
+    # --- Signaling Handler Methods ---
     async def handle_incoming_call(self, data):
         caller_id = data.get('callerId')
         rtc_message = data.get('rtcMessage')
-        print(f"Incoming call from {caller_id}. Auto-answering.")
-        self.remote_user_id = caller_id
-        await self.webrtc_manager.handle_remote_offer(rtc_message)
-    # ---------------------------------- 
 
-    # -- Webrtc Handler Methods ---
-    async def _handle_offer_created(self, sdp):
-        if self.remote_user_id:
-            await self.signaling_client.send_offer(self.remote_user_id, sdp)
+        print(f"MAIN APP: Incoming call from {caller_id} to main ID.")
 
-    async def _handle_answer_created(self, sdp):
-        if self.remote_user_id:
-            await self.signaling_client.send_answer(self.remote_user_id, sdp)
-            
-    async def _handle_ice_candidate(self, candidate):
-        if self.remote_user_id:
-            await self.signaling_client.send_ice_candidate(self.remote_user_id, candidate)
-    # -----------------------------
+        if len(self.active_sessions) >= MAX_SESSIONS:
+            print(f"MAIN APP: At max capacity ({MAX_SESSIONS} calls). Rejecting call from {caller_id}.")
+            # TODO: To emit a "busy" signal back to the caller here.
+            return
+
+        session = CallSession(
+            remote_user_id=caller_id,
+            signaling_client=self.signaling_client,
+            on_cleanup_callback=self.remove_session
+        )
+        self.active_sessions[caller_id] = session
+        await session.webrtc_manager.handle_remote_offer(rtc_message)
+
+    async def handle_call_answered(self, data):
+        # Find the correct session and delegate the answer
+        callee_id = data.get('callee')
+        session = self.active_sessions.get(callee_id)
+        if session:
+            await session.webrtc_manager.handle_remote_answer(data.get('rtcMessage'))
+
+    async def handle_ice_candidate(self, data):
+        # Find the correct session and delegate the ICE candidate
+        sender_id = data.get('sender')
+        session = self.active_sessions.get(sender_id)
+        if session:
+            await session.webrtc_manager.add_ice_candidate(data)
+    # ----------------------------------
+
+    async def remove_session(self, session_id):
+        """Callback function to remove a session when it has finished cleaning up."""
+        print(f"MAIN APP: Removing session {session_id} from active list.")
+        if session_id in self.active_sessions:
+            del self.active_sessions[session_id]
+        print(f"MAIN APP: Current active sessions: {len(self.active_sessions)}")
 
     async def start_call(self, target_id):
-        if not target_id:
-            print("Target ID cannot be empty.")
-            return
-        print(f"Starting call to {target_id}...")
-        self.remote_user_id = target_id
-        await self.webrtc_manager.create_offer()
-        
-    async def hang_up(self):
-        print("Hanging up call...")
-        await self.gemini_manager.stop_session()
-        await self.webrtc_manager.close()
-        # Reset state
-        self.gemini_manager = GeminiSessionManager()
-        self.webrtc_manager = WebRTCManager(self.gemini_manager.audio_playback_queue)
-        self._wire_components()
-        self.remote_user_id = None
-        await self.cli.show_menu()
+        """Outbound calling is more complex now, focusing on inbound for this design."""
+        print("Outbound calling from the server is not implemented in this multi-session design.")
+        print("This server is designed to receive calls at its main ID.")
+
+    async def hang_up(self, session_id_to_hang_up):
+        """Hangs up a specific call by its ID."""
+        print(f"MAIN APP: Attempting to hang up session {session_id_to_hang_up}.")
+        session = self.active_sessions.get(session_id_to_hang_up)
+        if session:
+            # This will trigger the session's internal cleanup, which will then call remove_session
+            await session.cleanup()
+        else:
+            print(f"MAIN APP: No active session found with ID {session_id_to_hang_up}.")
 
     async def shutdown(self):
         print("Shutting down application...")
-        # Check if hang_up needs to be awaited if it's async
-        if asyncio.iscoroutinefunction(self.hang_up):
-            await self.hang_up()
-        else:
-            self.hang_up()
+        # Create a copy of the sessions to iterate over, as cleanup will modify the dict
+        all_sessions = list(self.active_sessions.values())
+        for session in all_sessions:
+            await session.cleanup()
         await self.signaling_client.disconnect()
 
     async def run(self):
         try:
-            await self.signaling_client.connect(self.caller_id)
-            await self.cli.loop()
+            # Connect to signaling using the main "reception" ID
+            await self.signaling_client.connect(self.main_caller_id)
+            await self.cli.loop() # Assuming the CLI now calls hang_up with a specific ID
         except Exception as e:
             print(f"An error occurred in the application: {e}")
         finally:

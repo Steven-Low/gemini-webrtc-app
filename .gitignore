@@ -1,3 +1,4 @@
 ./client-gemini/.env
+./client-gemini/__pycache__
 .env
 
