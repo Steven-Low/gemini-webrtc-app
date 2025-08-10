@@ -843,12 +843,18 @@ export default function App({}) {
         <SettingsMenu
           isVisible={isMenuVisible}
           onClose={() => setIsMenuVisible(false)}
-          onSave={async (newAddress) => {
+          onSave={async (newAddress, newCallerId) => {
             try {
               await AsyncStorage.setItem('SOCKET_ADDRESS', newAddress);
               setSocketAddress(newAddress);
             } catch (e) {
               console.warn('Failed to save socket address', e);
+            }
+            try {
+              await AsyncStorage.setItem('SAVED_CALLER_ID', newCallerId);
+              setCallerId(newCallerId);
+            } catch (e) {
+              console.warn('Failed to save caller id', e)
             }
             setIsMenuVisible(false);
           }}
