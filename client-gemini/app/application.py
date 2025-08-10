@@ -2,8 +2,8 @@ import asyncio
 from .signaling import SignalingClient
 from .call_session import CallSession  
 from .cli import CLIHandler
+from config import MAX_SESSIONS
 
-MAX_SESSIONS = 3 
 
 class Application:
     def __init__(self):

@@ -10,9 +10,11 @@ import {
   StyleSheet,
   Animated,
   Dimensions,
+  AppState
 } from 'react-native';
 import TextInputContainer from './components/TextInputContainer';
 import SocketIOClient from 'socket.io-client';
+import PushNotification from 'react-native-push-notification';
 import {
   mediaDevices,
   RTCPeerConnection,
@@ -43,11 +45,13 @@ export default function App({}) {
   const [socketAddress, setSocketAddress] = useState('http://10.10.10.124:3500');
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   
-  const otherUserId = useRef(null);
+  const [otherUserId, setOtherUserId] = useState(null);       // fOR SYNCRHONOUS SHXT (UI)
+  const otherUserIdRef = useRef(otherUserId);                 // fOR ASYNCRONOUSE SHXT (RTC)
 
   const [localMicOn, setlocalMicOn] = useState(true);
   const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
-  
+
+  const appState = useRef(AppState.currentState);
 
   const peerConnection = useRef(
     new RTCPeerConnection({
@@ -61,7 +65,56 @@ export default function App({}) {
 
   let remoteRTCMessage = useRef(null);
 
-  const callerId = useMemo(() => getCallerId(), []);
+  // const callerId = useMemo(() => getCallerId(), []);
+  const [callerId, setCallerId] = useState("111111")
+ 
+ // +++ ADD THIS useEFFECT HOOK for notification setup +++
+  useEffect(() => {
+    // 1. Configure what happens when a notification is tapped
+    PushNotification.configure({
+      onNotification: function (notification) {
+        console.log("NOTIFICATION TAPPED:", notification);
+
+        // Bring the app to the incoming call screen
+        if (notification.data) {
+          remoteRTCMessage.current = notification.data.rtcMessage;
+          setOtherUserId(notification.data.callerId);
+          setType('INCOMING_CALL');
+        }
+        // This is required on iOS to handle completion of the notification task
+        notification.finish && notification.finish();
+      },
+      requestPermissions: Platform.OS === 'ios',
+    });
+
+    // 2. Create the notification channel for Android
+    PushNotification.createChannel(
+      {
+        channelId: "incoming-calls", // Must be a unique ID
+        channelName: "Incoming Calls",
+        channelDescription: "Notifications for new calls",
+        soundName: "default",
+        importance: 4, // High importance
+        vibrate: true,
+      },
+      (created) => console.log(`Notification channel 'incoming-calls' returned '${created}'`)
+    );
+
+    // 3. Listen for changes in the app's state (foreground/background)
+    const subscription = AppState.addEventListener('change', nextAppState => {
+        appState.current = nextAppState;
+        console.log('AppState changed to:', appState.current);
+    });
+
+    return () => {
+        subscription.remove();
+    };
+  }, []); // Run this setup only once when the app mounts
+
+
+  useEffect(() => {
+    otherUserIdRef.current = otherUserId;
+  }, [otherUserId]);
 
   useEffect(() => {
     const loadSocketAddress = async () => {
@@ -74,7 +127,18 @@ export default function App({}) {
         console.warn('Failed to load socket address', e);
       }
     };
+    const loadCallerId = async () => {
+      try {
+        const savedCallerId = await AsyncStorage.getItem('SAVED_CALLER_ID');
+        if (savedCallerId) {
+          setCallerId(savedCallerId);
+        }
+      } catch (e) {
+        console.warn('Failed to load caller id', e);
+      }
+    };
     loadSocketAddress();
+    loadCallerId();
   }, []);
 
   useEffect(() => {
@@ -88,18 +152,39 @@ export default function App({}) {
     return () => {
       newSocket.disconnect();
     };
-  }, [socketAddress, callerId]);
+  }, [socketAddress]);
 
   useEffect(() => {
     if (!socket) return;
 
+    // +++ MODIFY this 'newCall' handler +++
     socket.on('newCall', data => {
-      remoteRTCMessage.current = data.rtcMessage;
-      otherUserId.current = data.callerId;
-      setType('INCOMING_CALL');
+      // Check if the app is in the background or inactive
+      if (appState.current.match(/inactive|background/)) {
+        console.log('App is in background, showing notification.');
+        // If so, trigger a local notification
+        PushNotification.localNotification({
+          channelId: "incoming-calls", // Use the channel you created
+          title: `Incoming Call from ${data.callerId}`,
+          message: "Tap to answer or decline the call.",
+          allowWhileIdle: true, // Ensure it shows up on time
+          // Attach the call data so we can use it when the notification is tapped
+          userInfo: { 
+            callerId: data.callerId,
+            rtcMessage: data.rtcMessage 
+          },
+        });
+      } else {
+        // If the app is in the foreground, handle it directly as before
+        console.log('App is in foreground, showing incoming call screen.');
+        remoteRTCMessage.current = data.rtcMessage;
+        setOtherUserId(data.callerId);
+        setType('INCOMING_CALL');
+      }
     });
 
     socket.on('callAnswered', data => {
+      //console.log(data)
       remoteRTCMessage.current = data.rtcMessage;
       peerConnection.current.setRemoteDescription(
         new RTCSessionDescription(remoteRTCMessage.current),
@@ -108,7 +193,9 @@ export default function App({}) {
     });
 
     socket.on('callEnded', data => {
-      leave(notify=false)   
+      if (data.targetId == callerId){
+        leave(false)   
+      }
     })
 
     socket.on('ICEcandidate', data => {
@@ -168,7 +255,7 @@ export default function App({}) {
     peerConnection.current.onicecandidate = event => {
       if (event.candidate) {
         sendICEcandidate({
-          calleeId: otherUserId.current,
+          calleeId: otherUserIdRef.current,
           rtcMessage: event.candidate,
         });
       } else {
@@ -202,7 +289,7 @@ export default function App({}) {
     const sessionDescription = await peerConnection.current.createOffer();
     await peerConnection.current.setLocalDescription(sessionDescription);
     sendCall({
-      calleeId: otherUserId.current,
+      calleeId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
     });
   }
@@ -214,7 +301,7 @@ export default function App({}) {
     const sessionDescription = await peerConnection.current.createAnswer();
     await peerConnection.current.setLocalDescription(sessionDescription);
     answerCall({
-      callerId: otherUserId.current,
+      callerId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
     });
   }
@@ -232,10 +319,12 @@ export default function App({}) {
   }
 
   function leave(notify = true) {
-
     // Signal hangup and close existing connection
-    if (notify == true)
-      hangupCall({targetId: otherUserId.current})
+    if (notify == true){
+      console.log("Hanging up from user client.")
+      hangupCall({targetId: otherUserIdRef.current, senderId: callerId })
+    }
+
     peerConnection.current.close();
 
     // Create a new peer connection instance
@@ -255,7 +344,7 @@ export default function App({}) {
     newPeerConnection.onicecandidate = event => {
       if (event.candidate) {
         sendICEcandidate({
-          calleeId: otherUserId.current,
+          calleeId: otherUserIdRef.current,
           rtcMessage: event.candidate,
         });
       } else {
@@ -337,10 +426,8 @@ export default function App({}) {
                 </Text>
                 <TextInputContainer
                   placeholder={'Enter Caller ID'}
-                  value={otherUserId.current}
-                  setValue={text => {
-                    otherUserId.current = text;
-                  }}
+                  value={otherUserId}
+                  setValue={setOtherUserId}
                   keyboardType={'number-pad'}
                 />
                 <TouchableOpacity
@@ -420,7 +507,7 @@ export default function App({}) {
                 color: '#ffff',
                 letterSpacing: 6,
               }}>
-              {otherUserId.current}
+              {otherUserId}
             </Text>
           </View>
           <View
@@ -431,8 +518,8 @@ export default function App({}) {
             <TouchableOpacity
               onPress={() => {
                 setType('JOIN');
-                otherUserId.current = null;
-                leave(); // Make sure to call leave to clean up
+                setOtherUserId(null) 
+                leave(true); // Make sure to call leave to clean up
               }}
               style={{
                 backgroundColor: '#FF5D5D',
@@ -471,7 +558,7 @@ export default function App({}) {
                 marginTop: 12,
                 color: '#ffff',
               }}>
-              {otherUserId.current} is calling..
+              {otherUserId} is calling..
             </Text>
           </View>
           <View
@@ -556,7 +643,7 @@ export default function App({}) {
             <IconContainer
               backgroundColor={'red'}
               onPress={() => {
-                leave();
+                leave(true);
               }}
               Icon={() => {
                 return <CallEnd height={26} width={26} fill="#FFF" />;
@@ -617,6 +704,7 @@ export default function App({}) {
     // Settings Menu Component
   const SettingsMenu = ({ isVisible, onClose, onSave }) => {
     const [tempAddress, setTempAddress] = useState(socketAddress);
+    const [tempCallerId, setTempCallerId] = useState(callerId); 
     const slideAnim = useRef(new Animated.Value(width)).current;
 
     useEffect(() => {
@@ -628,7 +716,7 @@ export default function App({}) {
     }, [isVisible, slideAnim]);
 
     const handleSave = () => {
-      onSave(tempAddress);
+      onSave(tempAddress, tempCallerId);
       onClose();
     };
 
@@ -692,6 +780,20 @@ export default function App({}) {
               setValue={setTempAddress}
               keyboardType={'default'}
             />
+            <Text style={{
+              color: '#D0D4DD',
+              fontSize: 16,
+              marginBottom: 10,
+            }}>
+              Your Fixed Caller ID
+            </Text>
+            <TextInputContainer
+              placeholder={'Enter a fixed ID'}
+              value={tempCallerId}
+              setValue={setTempCallerId}
+              keyboardType={'default'}
+            />
+
             <TouchableOpacity
               onPress={handleSave}
               style={{

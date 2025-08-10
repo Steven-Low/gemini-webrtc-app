@@ -9,6 +9,9 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # A simple dictionary to map SocketIO session IDs (sid) to user IDs (callerId)
 socketio.sid_to_user_map = {}
 
+# Track active ongoing calls via sets set
+socketio.active_calls = set()  # {{A,B}, {A,C}}
+
 # Route to serve the main HTML file (e.g., index.html)
 @app.route('/')
 def serve_index():
@@ -65,6 +68,9 @@ def handle_call(data):
 
     if callee_id and rtc_message and caller_id:
         print(f"Call from '{caller_id}' to '{callee_id}'")
+
+        socketio.active_calls.add(frozenset({callee_id, caller_id}))
+
         # Emit 'newCall' event to the callee's room
         emit('newCall', {
             'callerId': caller_id,
@@ -84,17 +90,20 @@ def handle_answer_call(data):
     rtc_message = data.get('rtcMessage')
 
     # Get the callee (current user) ID from our map
-    callee_id = socketio.sid_to_user_map.get(request.sid)  
+    callee_id = socketio.sid_to_user_map.get(request.sid)
 
-    if caller_id and rtc_message and callee_id:
-        print(f"Call answered by '{callee_id}' for '{caller_id}'")
-        # Emit 'callAnswered' event to the caller's room
-        emit('callAnswered', {
-            'callee': callee_id,
-            'rtcMessage': rtc_message
-        }, room=caller_id)
+    if frozenset({caller_id, callee_id}) in socketio.active_calls:
+        if caller_id and rtc_message and callee_id:
+            print(f"Call answered by '{callee_id}' for '{caller_id}'")
+            # Emit 'callAnswered' event to the caller's room
+            emit('callAnswered', {
+                'callee': callee_id,
+                'rtcMessage': rtc_message
+            }, room=caller_id)
+        else:
+            print(f"Invalid 'answerCall' data received from {callee_id}: {data}")
     else:
-        print(f"Invalid 'answerCall' data received from {callee_id}: {data}")
+        print("Call was hung up before the rtc connection was established.")
         
 @socketio.on('hangupCall')
 def handle_hangup_call(data):
@@ -102,16 +111,19 @@ def handle_hangup_call(data):
     Handles a 'hangupCall' event from a client (ending a call).
     Notifies the other participant that the call has ended.
     """
-    target_id = data.get('targetId')  
+    target_id = data.get('targetId')
     sender_id = socketio.sid_to_user_map.get(request.sid)
 
     if target_id and sender_id:
-        print(f"'{sender_id}' hung up on '{target_id}'")
-        emit('callEnded', {
-            'senderId': sender_id
-        }, room=target_id)
+        # Established call: notify the target
+        print(f"'{sender_id}' hung up the call (target {target_id}).")
+        emit('callEnded', {'senderId': sender_id}, room=target_id)
     else:
-        print(f"Invalid 'hangupCall' data from {sender_id}: {data}")
+        print(f"Invalid hangupCall event: {data}")
+        return
+              
+    # Clear the active call set
+    socketio.active_calls.discard(frozenset({target_id, sender_id}))
 
 
 @socketio.on('ICEcandidate')
@@ -146,12 +158,15 @@ def handle_disconnect():
     Removes the user from our tracking map.
     """
     # Remove the user from our map upon disconnection
-    user_id = socketio.sid_to_user_map.pop(request.sid, 'Unknown')  
+    user_id = socketio.sid_to_user_map.pop(request.sid, 'Unknown')
+    to_remove = {call_set for call_set in socketio.active_calls if user_id in call_set}
+    for call_set in to_remove:
+        socketio.active_calls.discard(call_set)
     print(f"'{user_id}' (SID: {request.sid}) Disconnected") 
-
+ 
 
 # --- Main execution block ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3500))
     print(f"Server starting on {os.environ.get('HOSTNAME', 'Unknown host') or os.uname().nodename}:{port}")
-    socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True) # Listen to all interfacess 0.0.0.0
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

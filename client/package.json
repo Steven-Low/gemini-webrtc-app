@@ -13,7 +13,9 @@
     "@react-native-async-storage/async-storage": "^2.2.0",
     "react": "17.0.2",
     "react-native": "0.68.2",
+    "react-native-callkeep": "^4.3.16",
     "react-native-incall-manager": "^4.0.1",
+    "react-native-push-notification": "^8.1.1",
     "react-native-svg": "^13.7.0",
     "react-native-webrtc": "^1.94.2",
     "socket.io-client": "^4.5.4"

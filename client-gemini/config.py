@@ -10,7 +10,7 @@ CONF_CHAT_MODEL = "gemini-live-2.5-flash-preview"  # "gemini-live-2.5-flash-prev
 GEMINI_API_VERSION = "v1alpha" #"v1beta"
 GEMINI_VOICE = "Puck" # Orus | Kore | Puck | Charon | Fenrir | Aoede | Leda | Zephyr
 GEMINI_LANGUAGE = "en-US" # en-US | en-UK | ko-KR | ta-IN | ja-JP | fr-FR
-
+MAX_SESSIONS = 3
 
 # --- WebRTC Audio ---
 WEBRTC_SAMPLE_RATE = 24000

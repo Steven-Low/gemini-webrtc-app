@@ -108,6 +108,7 @@ class GeminiSessionManager:
                         "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
                         "language_code": GEMINI_LANGUAGE
                     },
+ 
                     tools=GEMINI_TOOLS,
                     system_instruction=GEMINI_SYSTEM_PROMPT
                 )   

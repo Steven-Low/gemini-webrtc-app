@@ -1,5 +1,6 @@
 # app/cli.py
 import asyncio
+from config import MAX_SESSIONS 
 
 class CLIHandler:
     def __init__(self, app):
@@ -79,7 +80,7 @@ class CLIHandler:
         if not active_sessions:
             print("No active calls.")
         else:
-            print(f"Total active calls: {len(active_sessions)} / {self.app.MAX_SESSIONS}")
+            print(f"Total active calls: {len(active_sessions)} / {MAX_SESSIONS}")
             for i, session_id in enumerate(active_sessions.keys()):
                 print(f"  {i+1}. Session with Remote User: {session_id}")
         

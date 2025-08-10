@@ -52,8 +52,10 @@ class CallSession:
         if getattr(self, "cleaned_up", False):
             print(f"SESSION [{self.remote_user_id}]: Cleanup already performed. Skipping.")
             return
+        
         self.cleaned_up = True
         print(f"SESSION [{self.remote_user_id}]: Cleaning up...")
+        await self.signaling_client.send_hangup(self.remote_user_id)
         await self.gemini_manager.stop_session()
         await self.webrtc_manager.close()
         # Notify the main application that this session is now over.
