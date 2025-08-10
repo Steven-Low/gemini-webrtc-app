@@ -52,16 +52,6 @@ export default function App({}) {
   const peerConnectionRef = useRef(null);
   let remoteRTCMessage = useRef(null);
 
-  const peerConnection = useRef(
-    new RTCPeerConnection({
-      iceServers: [
-        {urls: 'stun:stun.l.google.com:19302'},
-        {urls: 'stun:stun1.l.google.com:19302'},
-        {urls: 'stun:stun2.l.google.com:19302'},
-      ],
-    }),
-  );
-
     // Load initial data from storage when the app first mounts
   useEffect(() => {
     const loadInitialData = async () => {
