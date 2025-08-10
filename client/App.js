@@ -40,18 +40,17 @@ export default function App({}) {
   const [localStream, setlocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [type, setType] = useState('JOIN');
-
-  const [socket, setSocket] = useState(null);
+  const socketRef = useRef(null);
   const [socketAddress, setSocketAddress] = useState('http://10.10.10.124:3500');
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  
   const [otherUserId, setOtherUserId] = useState(null);       // fOR SYNCRHONOUS SHXT (UI)
   const otherUserIdRef = useRef(otherUserId);                 // fOR ASYNCRONOUSE SHXT (RTC)
-
   const [localMicOn, setlocalMicOn] = useState(true);
   const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
-
   const appState = useRef(AppState.currentState);
+  const [callerId, setCallerId] = useState("111111");
+  const peerConnectionRef = useRef(null);
+  let remoteRTCMessage = useRef(null);
 
   const peerConnection = useRef(
     new RTCPeerConnection({
@@ -63,10 +62,34 @@ export default function App({}) {
     }),
   );
 
-  let remoteRTCMessage = useRef(null);
+    // Load initial data from storage when the app first mounts
+  useEffect(() => {
+    const loadInitialData = async () => {
+      try {
+        const savedAddress = await AsyncStorage.getItem('SOCKET_ADDRESS');
+        if (savedAddress) {
+          setSocketAddress(savedAddress);
+        }
 
-  // const callerId = useMemo(() => getCallerId(), []);
-  const [callerId, setCallerId] = useState("111111")
+        const savedCallerId = await AsyncStorage.getItem('SAVED_CALLER_ID');
+        if (savedCallerId) {
+          console.log('Loaded fixed Caller ID:', savedCallerId);
+          setCallerId(savedCallerId);
+        } else {
+          const newId = getCallerId(); // getCallerId should be a simple non-hook function
+          console.log('Generated new Caller ID:', newId);
+          setCallerId(newId);
+        }
+      } catch (e) {
+        console.warn('Failed to load initial data', e);
+        // Fallback in case of storage error
+        if (!callerId) {
+          setCallerId(getCallerId());
+        }
+      }
+    };
+    loadInitialData();
+  }, []);
  
  // +++ ADD THIS useEFFECT HOOK for notification setup +++
   useEffect(() => {
@@ -109,74 +132,101 @@ export default function App({}) {
     return () => {
         subscription.remove();
     };
-  }, []); // Run this setup only once when the app mounts
+  }, []);  
 
 
   useEffect(() => {
     otherUserIdRef.current = otherUserId;
   }, [otherUserId]);
 
+ 
   useEffect(() => {
-    const loadSocketAddress = async () => {
-      try {
-        const savedAddress = await AsyncStorage.getItem('SOCKET_ADDRESS');
-        if (savedAddress) {
-          setSocketAddress(savedAddress);
-        }
-      } catch (e) {
-        console.warn('Failed to load socket address', e);
-      }
-    };
-    const loadCallerId = async () => {
-      try {
-        const savedCallerId = await AsyncStorage.getItem('SAVED_CALLER_ID');
-        if (savedCallerId) {
-          setCallerId(savedCallerId);
-        }
-      } catch (e) {
-        console.warn('Failed to load caller id', e);
-      }
-    };
-    loadSocketAddress();
-    loadCallerId();
-  }, []);
+    // 1. Wait until we have the necessary connection parameters
+    if (!socketAddress || !callerId) {
+      return;
+    }
 
-  useEffect(() => {
-    if (!socketAddress) return;
-    const newSocket = SocketIOClient(socketAddress, {
+    console.log(`--- Setting up connections for Caller ID: ${callerId} ---`);
+
+    // --- 2. Create the Peer Connection and Socket ---
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        {urls: 'stun:stun.l.google.com:19302'},
+        {urls: 'stun:stun1.l.google.com:19302'},
+        {urls: 'stun:stun2.l.google.com:19302'},
+      ],
+    });
+    peerConnectionRef.current = pc;
+
+    const socket = SocketIOClient(socketAddress, {
       transports: ['websocket'],
       query: { callerId },
     });
+    socketRef.current = socket;
 
-    setSocket(newSocket);
-    return () => {
-      newSocket.disconnect();
+    // --- 3. Set up ALL event listeners ---
+    
+    // WebRTC Listeners
+    pc.onaddstream = event => {
+      console.log("Remote stream received");
+      setRemoteStream(event.stream);
     };
-  }, [socketAddress]);
 
-  useEffect(() => {
-    if (!socket) return;
+    pc.onicecandidate = event => {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.emit('ICEcandidate', {
+          calleeId: otherUserIdRef.current,
+          rtcMessage: event.candidate,
+        });
+      }
+    };
 
-    // +++ MODIFY this 'newCall' handler +++
+    // Media Device Setup
+    mediaDevices.enumerateDevices().then(sourceInfos => {
+        let videoSourceId;
+        for (let i = 0; i < sourceInfos.length; i++) {
+          const sourceInfo = sourceInfos[i];
+          if (
+            sourceInfo.kind == 'videoinput' &&
+            sourceInfo.facing == 'user'
+          ) {
+            videoSourceId = sourceInfo.deviceId;
+          }
+        }
+  
+        mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            },
+            video: {
+              mandatory: { minWidth: 500, minHeight: 300, minFrameRate: 20 },
+              facingMode: 'user',
+              optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
+            },
+          })
+          .then(stream => {
+            if (!localWebcamOn){
+              stream.getVideoTracks().forEach(track => (track.enabled = false));
+            }
+            setlocalStream(stream);
+            if (peerConnectionRef.current) {
+                peerConnectionRef.current.addStream(stream);
+            }
+          });
+      });
+
+    // Socket Listeners
     socket.on('newCall', data => {
-      // Check if the app is in the background or inactive
       if (appState.current.match(/inactive|background/)) {
-        console.log('App is in background, showing notification.');
-        // If so, trigger a local notification
         PushNotification.localNotification({
-          channelId: "incoming-calls", // Use the channel you created
+          channelId: "incoming-calls",
           title: `Incoming Call from ${data.callerId}`,
-          message: "Tap to answer or decline the call.",
-          allowWhileIdle: true, // Ensure it shows up on time
-          // Attach the call data so we can use it when the notification is tapped
-          userInfo: { 
-            callerId: data.callerId,
-            rtcMessage: data.rtcMessage 
-          },
+          message: "Tap to answer.",
+          userInfo: data,
         });
       } else {
-        // If the app is in the foreground, handle it directly as before
-        console.log('App is in foreground, showing incoming call screen.');
         remoteRTCMessage.current = data.rtcMessage;
         setOtherUserId(data.callerId);
         setType('INCOMING_CALL');
@@ -184,92 +234,39 @@ export default function App({}) {
     });
 
     socket.on('callAnswered', data => {
-      //console.log(data)
       remoteRTCMessage.current = data.rtcMessage;
-      peerConnection.current.setRemoteDescription(
-        new RTCSessionDescription(remoteRTCMessage.current),
-      );
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(remoteRTCMessage.current));
+      }
       setType('WEBRTC_ROOM');
     });
 
     socket.on('callEnded', data => {
-      if (data.targetId == callerId){
-        leave(false)   
+      if (data.targetId === callerId) {
+        leave(false);
       }
-    })
+    });
 
     socket.on('ICEcandidate', data => {
-      let message = data.rtcMessage;
-      if (peerConnection.current) {
-        peerConnection.current
-          .addIceCandidate(new RTCIceCandidate(message))
-          .catch(err => {
-            console.log('Error adding ICE candidate', err);
-          });
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.rtcMessage));
       }
     });
 
-    let isFront = true;
-    mediaDevices.enumerateDevices().then(sourceInfos => {
-      let videoSourceId;
-      for (let i = 0; i < sourceInfos.length; i++) {
-        const sourceInfo = sourceInfos[i];
-        if (
-          sourceInfo.kind == 'videoinput' &&
-          sourceInfo.facing == (isFront ? 'user' : 'environment')
-        ) {
-          videoSourceId = sourceInfo.deviceId;
-        }
-      }
-
-      mediaDevices
-        .getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: {
-            mandatory: {
-              minWidth: 500,
-              minHeight: 300,
-              minFrameRate: 20,
-            },
-            facingMode: isFront ? 'user' : 'environment',
-            optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
-          },
-        })
-        .then(stream => {
-          if (!localWebcamOn){
-            stream.getVideoTracks().forEach(track => (track.enabled = false));
-          }
-          setlocalStream(stream);
-          peerConnection.current.addStream(stream);
-        });
-    });
-
-    peerConnection.current.onaddstream = event => {
-      setRemoteStream(event.stream);
-    };
-
-    peerConnection.current.onicecandidate = event => {
-      if (event.candidate) {
-        sendICEcandidate({
-          calleeId: otherUserIdRef.current,
-          rtcMessage: event.candidate,
-        });
-      } else {
-        console.log('End of candidates.');
-      }
-    };
-
+    // --- 4. Return the Master Cleanup Function ---
+    // This runs when the component unmounts OR when socketAddress/callerId changes.
     return () => {
-      socket.off('newCall');
-      socket.off('callAnswered');
-      socket.off('ICEcandidate');
-      socket.disconnect();
+      console.log("--- Tearing down old connections ---");
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
     };
-  }, [socket]);
+  }, [socketAddress, callerId]);
 
   useEffect(() => {
     InCallManager.start();
@@ -282,12 +279,12 @@ export default function App({}) {
   }, []);
 
   function sendICEcandidate(data) {
-    socket.emit('ICEcandidate', data);
+    socketRef.current.emit('ICEcandidate', data);
   }
 
   async function processCall() {
-    const sessionDescription = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(sessionDescription);
+    const sessionDescription = await peerConnectionRef.current.createOffer();
+    await peerConnectionRef.current.setLocalDescription(sessionDescription);
     sendCall({
       calleeId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
@@ -295,11 +292,11 @@ export default function App({}) {
   }
 
   async function processAccept() {
-    peerConnection.current.setRemoteDescription(
+    peerConnectionRef.current.setRemoteDescription(
       new RTCSessionDescription(remoteRTCMessage.current),
     );
-    const sessionDescription = await peerConnection.current.createAnswer();
-    await peerConnection.current.setLocalDescription(sessionDescription);
+    const sessionDescription = await peerConnectionRef.current.createAnswer();
+    await peerConnectionRef.current.setLocalDescription(sessionDescription);
     answerCall({
       callerId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
@@ -307,63 +304,41 @@ export default function App({}) {
   }
 
   function answerCall(data) {
-    socket.emit('answerCall', data);
+    socketRef.current.emit('answerCall', data);
   }
 
   function sendCall(data) {
-    socket.emit('call', data);
+    socketRef.current.emit('call', data);
   }
 
   function hangupCall(data) {
-    socket.emit('hangupCall', data)
+    socketRef.current.emit('hangupCall', data)
   }
 
-  function leave(notify = true) {
-    // Signal hangup and close existing connection
-    if (notify == true){
-      console.log("Hanging up from user client.")
-      hangupCall({targetId: otherUserIdRef.current, senderId: callerId })
-    }
-
-    peerConnection.current.close();
-
-    // Create a new peer connection instance
-    const newPeerConnection = new RTCPeerConnection({
-      iceServers: [
-        {urls: 'stun:stun.l.google.com:19302'},
-        {urls: 'stun:stun1.l.google.com:19302'},
-        {urls: 'stun:stun2.l.google.com:19302'},
-      ],
-    });
-
-    // Re-attach stream event handlers
-    newPeerConnection.onaddstream = event => {
-      setRemoteStream(event.stream);
-    };
-
-    newPeerConnection.onicecandidate = event => {
-      if (event.candidate) {
-        sendICEcandidate({
-          calleeId: otherUserIdRef.current,
-          rtcMessage: event.candidate,
-        });
-      } else {
-        console.log('End of candidates.');
-      }
-    };
-
-    // Add the existing local stream to the new connection
-    if (localStream) {
-      newPeerConnection.addStream(localStream);
+   function leave(notify = true) {
+    console.log("Leave function called.");
+    
+    // 1. Notify the other peer that you are hanging up
+    if (notify && socketRef.current) {
+      socketRef.current.emit('hangupCall', {
+        targetId: otherUserIdRef.current,
+        senderId: callerId 
+      });
     }
     
-    // Set the new connection to the ref
-    peerConnection.current = newPeerConnection;
-
-    // Reset UI state
+    // 2. Close the current peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      // The main useEffect will create a new RTCPeerConnection when the next call starts.
+      // We don't need to create one here.
+    }
+    
+    // 3. Reset the UI state to go back to the join screen
     setRemoteStream(null);
+    setOtherUserId(null); // Also reset the other user's ID
     setType('JOIN');
   }
+
 
   const JoinScreen = () => {
     return (
