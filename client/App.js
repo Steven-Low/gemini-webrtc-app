@@ -791,7 +791,7 @@ export default function App({}) {
               placeholder={'Enter a fixed ID'}
               value={tempCallerId}
               setValue={setTempCallerId}
-              keyboardType={'default'}
+              keyboardType={'number-pad'}
             />
 
             <TouchableOpacity
