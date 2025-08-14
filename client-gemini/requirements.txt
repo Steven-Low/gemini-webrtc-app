@@ -6,3 +6,4 @@ requests
 python-socketio
 dotenv
 aiohttp
+openwakeword

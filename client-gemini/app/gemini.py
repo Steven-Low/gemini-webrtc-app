@@ -6,7 +6,9 @@ from google import genai
 from google.genai import types
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
-
+import numpy as np
+from openwakeword.model import Model
+ 
 from config import (
     GEMINI_SAMPLE_RATE, 
     CONF_CHAT_MODEL, 
@@ -15,13 +17,15 @@ from config import (
     CHUNK_DURATION_MS,
     GEMINI_API_VERSION, 
     GEMINI_VOICE,
-    GEMINI_LANGUAGE
+    GEMINI_LANGUAGE,
+    WAKE_SERVICE_HOST,
+    WAKE_SERVICE_PORT
 )
 
 from .homeassistant_api import turn_on_light, turn_off_light
 turn_on_the_lights = {'name': 'turn_on_the_lights'}
 turn_off_the_lights = {'name': 'turn_off_the_lights'}
-wake_up = {'name': 'wake_up'}
+wake_up = {'name': 'good_bye'}
 
 
 GEMINI_TOOLS = [
@@ -51,8 +55,8 @@ Identify yourself as an AI language model.
 Acknowledge when you lack information and suggest using the 'google_search'  tool.
 Refer users to human experts for complex inquiries outside your scope.
 Handling Disagreement: While prioritizing the user’s request, consider providing an alternate perspective if it aligns with safety and objectivity and acknowledges potential biases.
-III. Wake word Detection
-Using the wake_up tool when the user say 'Ok Google', 'Ok Nabu', or 'Alexa'. 
+III. Sleep Mode
+Using the user said  good bye or leaving, execute the 'good_bye' tool to turn into sleep mode
 IV. Google Search Integration
 Focused Answers: When answering questions using google search tool results, synthesize information from the provided results.
 Source Prioritization: Prioritize reputable and trustworthy websites. Cite sources using numerical references [1]. Avoid generating URLs within the response.
@@ -72,6 +76,8 @@ class GeminiSessionManager:
         self.failed = False
 
         self.interrupt_enabled = True
+        self.wakeword_model = None
+        self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
         self.is_wake = asyncio.Event() 
 
     #TODO: Handle video frames
@@ -92,6 +98,7 @@ class GeminiSessionManager:
         print("Initializing Gemini Live API session...")
         
         try: 
+            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__), "ok_nabu.onnx")])
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
             while True:
                 gemini_config = types.LiveConnectConfig(
@@ -119,7 +126,7 @@ class GeminiSessionManager:
                 try:
                     async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
                         self.session = session
-                        self.is_wake.set()
+
                         print("Gemini LiveAPI connection established.")
                         
                         send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
@@ -193,8 +200,7 @@ class GeminiSessionManager:
                 async for response in turn:
                     if data := response.data:
                         print(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
-                        if self.is_wake.is_set():
-                            await self.raw_audio_to_play_queue.put(bytes(data))
+                        await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
                         sys.stdout.write(f"\rGemini: {text}\n> ")
                         sys.stdout.flush()
@@ -233,8 +239,8 @@ class GeminiSessionManager:
                                 result = turn_on_light()
                             elif fc.name == "turn_off_the_lights":
                                 result = turn_off_light()
-                            elif fc.name == "wake_up":
-                                self.is_wake.set()
+                            elif fc.name == "good_bye":
+                                self.is_wake.clear()
                                 result = self.is_wake.is_set()
                             else:
                                 result = {"error": f"Unknown function: {fc.name}"}
@@ -258,15 +264,44 @@ class GeminiSessionManager:
             self.failed = True
             raise
 
+
     async def _send_to_gemini_task(self, track):
         resampler = AudioResampler(format="s16", layout="mono", rate=GEMINI_SAMPLE_RATE)
+        
         try:
             while True:
                 frame = await track.recv()
                 resampled_frames = resampler.resample(frame)
+
                 for r_frame in resampled_frames:
-                    audio_bytes = r_frame.to_ndarray().tobytes()
-                    await self.session.send(input={"data": audio_bytes, "mime_type": "audio/pcm"})
+                    audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
+                    audio_bytes = audio_np.tobytes()
+
+                    if not self.is_wake.is_set():
+                        # Accumulate audio until we have at least 400 samples
+                        self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
+
+                        while len(self.wake_buffer) >= 400:
+                            chunk = self.wake_buffer[:400]
+                            self.wake_buffer = self.wake_buffer[400:]
+
+                            prediction = self.wakeword_model.predict(chunk)
+                            for mdl, scores in self.wakeword_model.prediction_buffer.items():
+                                if scores[-1] > 0.5:  # threshold
+                                    print(f"[WakeWord] Detected '{mdl}' with score {scores[-1]:.3f}")
+                                    self.wakeword_model.prediction_buffer.clear()
+                                    self.wake_buffer = np.array([], dtype=np.int16)
+                                    self.is_wake.set()
+                                    break
+
+                            if self.is_wake.is_set():
+                                break
+                    else:
+                        # Send raw audio to Gemini once wake word detected
+                        await self.session.send(
+                            input={"data": audio_bytes, "mime_type": "audio/pcm"}
+                        )
+
         except MediaStreamError:
             print("User audio track ended.")
         except asyncio.CancelledError:
@@ -275,4 +310,3 @@ class GeminiSessionManager:
             print(f"Error in send_to_gemini_task: {e}")
             self.failed = True
             raise
-

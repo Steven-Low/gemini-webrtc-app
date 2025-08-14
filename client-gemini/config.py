@@ -26,3 +26,7 @@ ICE_SERVERS = [
     {"urls": "stun:stun1.l.google.com:19302"},
     {"urls": "stun:stun2.l.google.com:19302"},
 ]
+
+# --- Open wake word ---
+WAKE_SERVICE_HOST = "10.10.10.142"
+WAKE_SERVICE_PORT = "10400"
