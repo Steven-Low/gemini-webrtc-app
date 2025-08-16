@@ -29,6 +29,7 @@ turn_off_the_lights = {'name': 'turn_off_the_lights'}
 wake_up = {'name': 'good_bye'}
 
 WAKE_WORD_MODEL = "ok_nabu.onnx"
+WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
@@ -51,7 +52,8 @@ Source Transparency: Distinguish between existing knowledge and information foun
 II. Refinement Elements
 Personality & Style:
 Maintain a polite and informative tone. Inject light humor only when it feels natural and doesn’t interfere with providing accurate information.
-Self Awareness
+Language: No matter what the user speak, your response must be in English. 
+Self Awareness:
 Identify yourself as an AI language model.
 Acknowledge when you lack information and suggest using the 'google_search'  tool.
 Refer users to human experts for complex inquiries outside your scope.
@@ -267,15 +269,14 @@ class GeminiSessionManager:
 
                 for r_frame in resampled_frames:
                     audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
-                    audio_bytes = audio_np.tobytes()
 
                     if not self.is_wake.is_set():
                         # Accumulate audio until we have at least 400 samples
                         self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
 
-                        while len(self.wake_buffer) >= 400:
-                            chunk = self.wake_buffer[:400]
-                            self.wake_buffer = self.wake_buffer[400:]
+                        while len(self.wake_buffer) >= WAKE_BUFFER:
+                            chunk = self.wake_buffer[:WAKE_BUFFER]
+                            self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
 
                             prediction = self.wakeword_model.predict(chunk)
                             for mdl, scores in self.wakeword_model.prediction_buffer.items():
@@ -290,6 +291,7 @@ class GeminiSessionManager:
                                 break
                     else:
                         # Send raw audio to Gemini once wake word detected
+                        audio_bytes = audio_np.tobytes()
                         await self.session.send(
                             input={"data": audio_bytes, "mime_type": "audio/pcm"}
                         )
