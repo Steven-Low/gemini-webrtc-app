@@ -155,7 +155,6 @@ export default function App({}) {
     });
     socketRef.current = socket;
 
-    // --- 3. Set up ALL event listeners ---
     
     // WebRTC Listeners
     pc.onaddstream = event => {
@@ -171,6 +170,13 @@ export default function App({}) {
         });
       }
     };
+
+    pc.onconnectionstatechange = event => {
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+        console.log("Connection: " + pc.connectionState)
+        leave(false);
+      }
+    }
 
     // Media Device Setup
     mediaDevices.enumerateDevices().then(sourceInfos => {
@@ -306,7 +312,7 @@ export default function App({}) {
     socketRef.current.emit('hangupCall', data)
   }
 
-   function leave(notify = true) {
+  function leave(notify = true) {
     console.log("Leave function called.");
     
     // 1. Notify the other peer that you are hanging up
