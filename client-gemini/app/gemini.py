@@ -8,7 +8,7 @@ from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
 import numpy as np
 from openwakeword.model import Model
- 
+from .homeassistant_api import turn_on_light, turn_off_light
 from config import (
     GEMINI_SAMPLE_RATE, 
     CONF_CHAT_MODEL, 
@@ -19,10 +19,13 @@ from config import (
     GEMINI_VOICE,
     GEMINI_LANGUAGE,
     WAKE_SERVICE_HOST,
-    WAKE_SERVICE_PORT,
+    WAKE_SERVICE_PORT, 
 )
 
-from .homeassistant_api import turn_on_light, turn_off_light
+import logging
+
+LOGGER = logging.getLogger(__name__)
+
 turn_on_the_lights = {'name': 'turn_on_the_lights'}
 turn_off_the_lights = {'name': 'turn_off_the_lights'}
 wake_up = {'name': 'good_bye'}
@@ -73,8 +76,6 @@ class GeminiSessionManager:
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
         self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
         self.session_handle = None
-        self.failed = False
-
         self.interrupt_enabled = True
         self.wakeword_model = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
@@ -85,20 +86,20 @@ class GeminiSessionManager:
         asyncio.create_task(self._drain_track(webrtc_track))
 
     async def _drain_track(self, track):
-        print("Skipping webrtc video tracks...")
+        LOGGER.info("Skipping webrtc video tracks.")
         try:
             while True:
                 await track.recv()  
         except MediaStreamError:
-            print(f"Track {track.kind}:{track.id} ended.")
+            LOGGER.warning("Track %s:%s ended.",track.kind, track.id)
         except asyncio.CancelledError:
             pass 
 
     async def start_session(self, webrtc_track):
-        print("Initializing Gemini Live API session...")
+        LOGGER.info(">>>>>>> Initializing Gemini Live API session <<<<<<<")
         
         try: 
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__), WAKE_WORD_MODEL)])
+            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"openwakeword", WAKE_WORD_MODEL)])
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
             while True:
                 gemini_config = types.LiveConnectConfig(
@@ -121,36 +122,34 @@ class GeminiSessionManager:
                 )   
 
                 if self.session_handle:
-                    print(f"Attempting to resume session with handle: {self.session_handle}")
+                    LOGGER.debug("Attempting to resume handle with handle: %s", self.session_handle)
 
                 try:
                     async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
                         self.session = session
 
-                        print("Gemini LiveAPI connection established.")
+                        LOGGER.info("Gemini LiveAPI connection established.")
                         
                         send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
                         receive_task = asyncio.create_task(self._receive_from_gemini_task())
                         playback_task = asyncio.create_task(self._playback_manager_task())
 
                         self.tasks = [send_task, receive_task, playback_task]
-                        self.failed = False
                         await asyncio.gather(*self.tasks)
                          
                 except Exception as e:
-                    print(f"Session Timeout with error: {e}")
+                    LOGGER.debug("Session timeout: %s", e)
                     await self.stop_session()
                     
                 finally:
-                    if not self.failed:
-                        print(f"Gemini session has ended cleanly: Failed {self.failed}")
-                        break 
+                    LOGGER.debug(f"Gemini session has ended cleanly.")
+                    break 
 
         except Exception as e:
-            print(f"Gemini session has ended unexpectedly: {e}")
+            LOGGER.error("Gemini session has ended unexpectedly: %s", e)
         
         finally:
-            print("Gemini session has ended.")
+            LOGGER.warning("All gemini tasks have ended.")
             await self.stop_session()
 
     async def stop_session(self):
@@ -168,7 +167,7 @@ class GeminiSessionManager:
             await self.session.close()
             self.session = None
 
-        print("Gemini session cleaned up.")
+        LOGGER.warning("Gemini session cleaning up.")
 
     async def _playback_manager_task(self):
         """
@@ -176,14 +175,14 @@ class GeminiSessionManager:
         and then calls the "slow" chunking function. This decouples playback
         from the main receive loop.
         """
-        print("Playback manager started.")
+        LOGGER.debug("Playback manager started.")
         try:
             while True:
                 raw_buffer = await self.raw_audio_to_play_queue.get()
                 await self._play_audio(raw_buffer)
                 self.raw_audio_to_play_queue.task_done()
         except asyncio.CancelledError:
-            print("Playback manager cancelled.")
+            LOGGER.debug("Playback manager cancelled.")
 
     async def _play_audio(self, full_audio_buffer: bytes):
         for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
@@ -199,15 +198,11 @@ class GeminiSessionManager:
                 turn = self.session.receive()
                 async for response in turn:
                     if data := response.data:
-                        print(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
+                        LOGGER.debug(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
                         await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
-                        sys.stdout.write(f"\rGemini: {text}\n> ")
-                        sys.stdout.flush()
+                        LOGGER.debug(f"Gemini: {text}")
                     elif go_away := response.go_away:
-                        print("Gemini session timeout:",go_away.time_left)
-                        # TODO: Create session timer to put gemini into sleep mode
-                        # self.is_wake.clear()
                         raise TimeoutError(f"Gemini session timeout: {go_away.time_left}")
                     
                     if response.session_resumption_update:
@@ -220,12 +215,12 @@ class GeminiSessionManager:
                         if model_turn := response.server_content.model_turn:
                             for part in model_turn.parts:
                                 if part.executable_code:
-                                    print("Code:", part.executable_code.code)
+                                    LOGGER.debug("Code: %s", part.executable_code.code)
                                 elif part.code_execution_result:
-                                    print("Output:", part.code_execution_result.output)
+                                    LOGGER.debug("Code: %s", part.code_execution_result.output)
                                         
                         if response.server_content.interrupted is self.interrupt_enabled:
-                            print("Interupting... Clearing audio queues.")
+                            LOGGER.debug("VAD Interrupting.")
                             while not self.raw_audio_to_play_queue.empty():
                                 self.raw_audio_to_play_queue.get_nowait()
                             while not self.audio_playback_queue.empty():
@@ -258,10 +253,9 @@ class GeminiSessionManager:
                         break
                         
         except asyncio.CancelledError:
-            print("Receive_from_gemini_task cancelled.")
+            LOGGER.debug("Receive_from_gemini_task cancelled.")
         except Exception as e:
-            print(f"Error in receive_from_gemini_task: {e}")
-            self.failed = True
+            LOGGER.error(f"Error in receive_from_gemini_task: {e}")
             raise
 
 
@@ -288,7 +282,7 @@ class GeminiSessionManager:
                             prediction = self.wakeword_model.predict(chunk)
                             for mdl, scores in self.wakeword_model.prediction_buffer.items():
                                 if scores[-1] > 0.5:  # threshold
-                                    print(f"[WakeWord] Detected '{mdl}' with score {scores[-1]:.3f}")
+                                    LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
                                     self.wakeword_model.prediction_buffer.clear()
                                     self.wake_buffer = np.array([], dtype=np.int16)
                                     self.is_wake.set()
@@ -303,10 +297,9 @@ class GeminiSessionManager:
                         )
 
         except MediaStreamError:
-            print("User audio track ended.")
+            LOGGER.debug("User audio track ended.")
         except asyncio.CancelledError:
-            print("Send_to_gemini_task cancelled.")
+            LOGGER.debug("Send_to_gemini_task cancelled.")
         except Exception as e:
-            print(f"Error in send_to_gemini_task: {e}")
-            self.failed = True
+            LOGGER.error(f"Error in send_to_gemini_task: {e}")
             raise

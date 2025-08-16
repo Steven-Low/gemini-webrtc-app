@@ -118,7 +118,6 @@ class CLIHandler:
                 print("Hangup cancelled.")
                 return
 
-            # The hang_up method in the main app now expects the session ID
             await self.app.hang_up(target_id)
 
         except (EOFError, KeyboardInterrupt):

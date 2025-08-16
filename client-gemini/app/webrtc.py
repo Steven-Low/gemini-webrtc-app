@@ -1,4 +1,5 @@
 # app/webrtc.py
+import logging
 import asyncio
 import time
 import numpy as np
@@ -6,6 +7,8 @@ from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSession
 from aiortc.contrib.media import MediaStreamError
 from av.audio.frame import AudioFrame
 from config import CHUNK_DURATION_MS, ICE_SERVERS, WEBRTC_SAMPLE_RATE, SAMPLES_PER_FRAME, WEBRTC_TIME_BASE
+
+LOGGER = logging.getLogger(__name__)
 
 class GeminiOutputTrack(AudioStreamTrack):
     kind = "audio"
@@ -68,7 +71,7 @@ class WebRTCManager:
      
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
-            print(f"RTC Connection State: {self.pc.connectionState}")
+            LOGGER.debug(f"RTC Connection State: {self.pc.connectionState}")
             if self.pc.connectionState in ["failed", "disconnected", "closed"]:
                 if self.on_connection_closed_callback:
                     await self.on_connection_closed_callback()
@@ -108,9 +111,9 @@ class WebRTCManager:
                     sdpMLineIndex=rtcMessage["sdpMLineIndex"]
                 )
             )
-            print("Added remote ICE candidate.")
+            LOGGER.debug("Added remote ICE candidate.")
         except Exception as e:
-            print(f"Error adding ICE candidate: {e}")
+            LOGGER.error(f"Error adding ICE candidate: {e}")
 
 
     async def close(self):
