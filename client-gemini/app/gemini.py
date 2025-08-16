@@ -18,8 +18,6 @@ from config import (
     GEMINI_API_VERSION, 
     GEMINI_VOICE,
     GEMINI_LANGUAGE,
-    WAKE_SERVICE_HOST,
-    WAKE_SERVICE_PORT, 
 )
 
 import logging
