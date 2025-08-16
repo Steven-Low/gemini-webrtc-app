@@ -49,6 +49,7 @@ export default function App({}) {
   const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
   const appState = useRef(AppState.currentState);
   const [callerId, setCallerId] = useState("111111");
+  const [resetNonce, setResetNonce] = useState(0);
   const peerConnectionRef = useRef(null);
   let remoteRTCMessage = useRef(null);
 
@@ -256,7 +257,7 @@ export default function App({}) {
         peerConnectionRef.current = null;
       }
     };
-  }, [socketAddress, callerId]);
+  }, [socketAddress, callerId, resetNonce]);
 
   useEffect(() => {
     InCallManager.start();
@@ -319,14 +320,15 @@ export default function App({}) {
     // 2. Close the current peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
-      // The main useEffect will create a new RTCPeerConnection when the next call starts.
-      // We don't need to create one here.
     }
     
     // 3. Reset the UI state to go back to the join screen
     setRemoteStream(null);
     setOtherUserId(null); // Also reset the other user's ID
     setType('JOIN');
+
+    // 4. Rebuild socket and peer connection for next call
+    setResetNonce(prevNonce => prevNonce + 1);
   }
 
 
