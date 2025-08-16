@@ -1,6 +1,6 @@
 ./client-gemini/.env
 ./client-gemini/__pycache__
-./client-gemini/app/__pycache__
+client-gemini/app/__pycache__/
 signalling-server-js
 .env
 

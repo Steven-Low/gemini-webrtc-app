@@ -10,9 +10,11 @@ import {
   StyleSheet,
   Animated,
   Dimensions,
+  AppState
 } from 'react-native';
 import TextInputContainer from './components/TextInputContainer';
 import SocketIOClient from 'socket.io-client';
+import PushNotification from 'react-native-push-notification';
 import {
   mediaDevices,
   RTCPeerConnection,
@@ -38,148 +40,230 @@ export default function App({}) {
   const [localStream, setlocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [type, setType] = useState('JOIN');
-
-  const [socket, setSocket] = useState(null);
+  const socketRef = useRef(null);
   const [socketAddress, setSocketAddress] = useState('http://10.10.10.124:3500');
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  
-  const otherUserId = useRef(null);
-
+  const [otherUserId, setOtherUserId] = useState(null);       // fOR SYNCRHONOUS SHXT (UI)
+  const otherUserIdRef = useRef(otherUserId);                 // fOR ASYNCRONOUSE SHXT (RTC)
   const [localMicOn, setlocalMicOn] = useState(true);
   const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
-  
-
-  const peerConnection = useRef(
-    new RTCPeerConnection({
-      iceServers: [
-        {urls: 'stun:stun.l.google.com:19302'},
-        {urls: 'stun:stun1.l.google.com:19302'},
-        {urls: 'stun:stun2.l.google.com:19302'},
-      ],
-    }),
-  );
-
+  const appState = useRef(AppState.currentState);
+  const [callerId, setCallerId] = useState("111111");
+  const [resetNonce, setResetNonce] = useState(0);
+  const peerConnectionRef = useRef(null);
   let remoteRTCMessage = useRef(null);
 
-  const callerId = useMemo(() => getCallerId(), []);
-
+    // Load initial data from storage when the app first mounts
   useEffect(() => {
-    const loadSocketAddress = async () => {
+    const loadInitialData = async () => {
       try {
         const savedAddress = await AsyncStorage.getItem('SOCKET_ADDRESS');
         if (savedAddress) {
           setSocketAddress(savedAddress);
         }
+
+        const savedCallerId = await AsyncStorage.getItem('SAVED_CALLER_ID');
+        if (savedCallerId) {
+          console.log('Loaded fixed Caller ID:', savedCallerId);
+          setCallerId(savedCallerId);
+        } else {
+          const newId = getCallerId(); // getCallerId should be a simple non-hook function
+          console.log('Generated new Caller ID:', newId);
+          setCallerId(newId);
+        }
       } catch (e) {
-        console.warn('Failed to load socket address', e);
+        console.warn('Failed to load initial data', e);
+        // Fallback in case of storage error
+        if (!callerId) {
+          setCallerId(getCallerId());
+        }
       }
     };
-    loadSocketAddress();
+    loadInitialData();
   }, []);
+ 
+ // +++ ADD THIS useEFFECT HOOK for notification setup +++
+  useEffect(() => {
+    // 1. Configure what happens when a notification is tapped
+    PushNotification.configure({
+      onNotification: function (notification) {
+        console.log("NOTIFICATION TAPPED:", notification);
+
+        // Bring the app to the incoming call screen
+        if (notification.data) {
+          remoteRTCMessage.current = notification.data.rtcMessage;
+          setOtherUserId(notification.data.callerId);
+          setType('INCOMING_CALL');
+        }
+        // This is required on iOS to handle completion of the notification task
+        notification.finish && notification.finish();
+      },
+      requestPermissions: Platform.OS === 'ios',
+    });
+
+    // 2. Create the notification channel for Android
+    PushNotification.createChannel(
+      {
+        channelId: "incoming-calls", // Must be a unique ID
+        channelName: "Incoming Calls",
+        channelDescription: "Notifications for new calls",
+        soundName: "default",
+        importance: 4, // High importance
+        vibrate: true,
+      },
+      (created) => console.log(`Notification channel 'incoming-calls' returned '${created}'`)
+    );
+
+    // 3. Listen for changes in the app's state (foreground/background)
+    const subscription = AppState.addEventListener('change', nextAppState => {
+        appState.current = nextAppState;
+        console.log('AppState changed to:', appState.current);
+    });
+
+    return () => {
+        subscription.remove();
+    };
+  }, []);  
+
 
   useEffect(() => {
-    if (!socketAddress) return;
-    const newSocket = SocketIOClient(socketAddress, {
+    otherUserIdRef.current = otherUserId;
+  }, [otherUserId]);
+
+ 
+  useEffect(() => {
+    // 1. Wait until we have the necessary connection parameters
+    if (!socketAddress || !callerId) {
+      return;
+    }
+
+    console.log(`--- Setting up connections for Caller ID: ${callerId} ---`);
+
+    // --- 2. Create the Peer Connection and Socket ---
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        {urls: 'stun:stun.l.google.com:19302'},
+        {urls: 'stun:stun1.l.google.com:19302'},
+        {urls: 'stun:stun2.l.google.com:19302'},
+      ],
+    });
+    peerConnectionRef.current = pc;
+
+    const socket = SocketIOClient(socketAddress, {
       transports: ['websocket'],
       query: { callerId },
     });
+    socketRef.current = socket;
 
-    setSocket(newSocket);
-    return () => {
-      newSocket.disconnect();
+    
+    // WebRTC Listeners
+    pc.onaddstream = event => {
+      console.log("Remote stream received");
+      setRemoteStream(event.stream);
     };
-  }, [socketAddress, callerId]);
 
-  useEffect(() => {
-    if (!socket) return;
+    pc.onicecandidate = event => {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.emit('ICEcandidate', {
+          calleeId: otherUserIdRef.current,
+          rtcMessage: event.candidate,
+        });
+      }
+    };
 
+    pc.onconnectionstatechange = event => {
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+        console.log("Connection: " + pc.connectionState)
+        leave(false);
+      }
+    }
+
+    // Media Device Setup
+    mediaDevices.enumerateDevices().then(sourceInfos => {
+        let videoSourceId;
+        for (let i = 0; i < sourceInfos.length; i++) {
+          const sourceInfo = sourceInfos[i];
+          if (
+            sourceInfo.kind == 'videoinput' &&
+            sourceInfo.facing == 'user'
+          ) {
+            videoSourceId = sourceInfo.deviceId;
+          }
+        }
+  
+        mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            },
+            video: {
+              mandatory: { minWidth: 500, minHeight: 300, minFrameRate: 20 },
+              facingMode: 'user',
+              optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
+            },
+          })
+          .then(stream => {
+            if (!localWebcamOn){
+              stream.getVideoTracks().forEach(track => (track.enabled = false));
+            }
+            setlocalStream(stream);
+            if (peerConnectionRef.current) {
+                peerConnectionRef.current.addStream(stream);
+            }
+          });
+      });
+
+    // Socket Listeners
     socket.on('newCall', data => {
-      remoteRTCMessage.current = data.rtcMessage;
-      otherUserId.current = data.callerId;
-      setType('INCOMING_CALL');
+      if (appState.current.match(/inactive|background/)) {
+        PushNotification.localNotification({
+          channelId: "incoming-calls",
+          title: `Incoming Call from ${data.callerId}`,
+          message: "Tap to answer.",
+          userInfo: data,
+        });
+      } else {
+        remoteRTCMessage.current = data.rtcMessage;
+        setOtherUserId(data.callerId);
+        setType('INCOMING_CALL');
+      }
     });
 
     socket.on('callAnswered', data => {
       remoteRTCMessage.current = data.rtcMessage;
-      peerConnection.current.setRemoteDescription(
-        new RTCSessionDescription(remoteRTCMessage.current),
-      );
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(remoteRTCMessage.current));
+      }
       setType('WEBRTC_ROOM');
     });
 
+    socket.on('callEnded', data => {
+      if (data.targetId === callerId) {
+        leave(false);
+      }
+    });
+
     socket.on('ICEcandidate', data => {
-      let message = data.rtcMessage;
-      if (peerConnection.current) {
-        peerConnection.current
-          .addIceCandidate(new RTCIceCandidate(message))
-          .catch(err => {
-            console.log('Error adding ICE candidate', err);
-          });
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.rtcMessage));
       }
     });
 
-    let isFront = true;
-    mediaDevices.enumerateDevices().then(sourceInfos => {
-      let videoSourceId;
-      for (let i = 0; i < sourceInfos.length; i++) {
-        const sourceInfo = sourceInfos[i];
-        if (
-          sourceInfo.kind == 'videoinput' &&
-          sourceInfo.facing == (isFront ? 'user' : 'environment')
-        ) {
-          videoSourceId = sourceInfo.deviceId;
-        }
-      }
-
-      mediaDevices
-        .getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: {
-            mandatory: {
-              minWidth: 500,
-              minHeight: 300,
-              minFrameRate: 20,
-            },
-            facingMode: isFront ? 'user' : 'environment',
-            optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
-          },
-        })
-        .then(stream => {
-          if (!localWebcamOn){
-            stream.getVideoTracks().forEach(track => (track.enabled = false));
-          }
-          setlocalStream(stream);
-          peerConnection.current.addStream(stream);
-        });
-    });
-
-    peerConnection.current.onaddstream = event => {
-      setRemoteStream(event.stream);
-    };
-
-    peerConnection.current.onicecandidate = event => {
-      if (event.candidate) {
-        sendICEcandidate({
-          calleeId: otherUserId.current,
-          rtcMessage: event.candidate,
-        });
-      } else {
-        console.log('End of candidates.');
-      }
-    };
-
+    // --- 4. Return the Master Cleanup Function ---
+    // This runs when the component unmounts OR when socketAddress/callerId changes.
     return () => {
-      socket.off('newCall');
-      socket.off('callAnswered');
-      socket.off('ICEcandidate');
-      // BUG 2 FIX: Properly disconnect socket on component unmount
-      socket.disconnect();
+      console.log("--- Tearing down old connections ---");
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
     };
-  }, [socket]);
+  }, [socketAddress, callerId, resetNonce]);
 
   useEffect(() => {
     InCallManager.start();
@@ -192,83 +276,69 @@ export default function App({}) {
   }, []);
 
   function sendICEcandidate(data) {
-    socket.emit('ICEcandidate', data);
+    socketRef.current.emit('ICEcandidate', data);
   }
 
   async function processCall() {
-    const sessionDescription = await peerConnection.current.createOffer();
-    await peerConnection.current.setLocalDescription(sessionDescription);
+    const sessionDescription = await peerConnectionRef.current.createOffer();
+    await peerConnectionRef.current.setLocalDescription(sessionDescription);
     sendCall({
-      calleeId: otherUserId.current,
+      calleeId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
     });
   }
 
   async function processAccept() {
-    peerConnection.current.setRemoteDescription(
+    peerConnectionRef.current.setRemoteDescription(
       new RTCSessionDescription(remoteRTCMessage.current),
     );
-    const sessionDescription = await peerConnection.current.createAnswer();
-    await peerConnection.current.setLocalDescription(sessionDescription);
+    const sessionDescription = await peerConnectionRef.current.createAnswer();
+    await peerConnectionRef.current.setLocalDescription(sessionDescription);
     answerCall({
-      callerId: otherUserId.current,
+      callerId: otherUserIdRef.current,
       rtcMessage: sessionDescription,
     });
   }
 
   function answerCall(data) {
-    socket.emit('answerCall', data);
+    socketRef.current.emit('answerCall', data);
   }
 
   function sendCall(data) {
-    socket.emit('call', data);
+    socketRef.current.emit('call', data);
   }
 
-  // BUG 1 FIX: Rewritten `leave` function
-  function leave() {
-    // 1. Close existing connection
-    peerConnection.current.close();
+  function hangupCall(data) {
+    socketRef.current.emit('hangupCall', data)
+  }
 
-    // 2. Create a new peer connection instance
-    const newPeerConnection = new RTCPeerConnection({
-      iceServers: [
-        {urls: 'stun:stun.l.google.com:19302'},
-        {urls: 'stun:stun1.l.google.com:19302'},
-        {urls: 'stun:stun2.l.google.com:19302'},
-      ],
-    });
-
-    // 3. Re-attach stream event handlers
-    newPeerConnection.onaddstream = event => {
-      setRemoteStream(event.stream);
-    };
-
-    newPeerConnection.onicecandidate = event => {
-      if (event.candidate) {
-        sendICEcandidate({
-          calleeId: otherUserId.current,
-          rtcMessage: event.candidate,
-        });
-      } else {
-        console.log('End of candidates.');
-      }
-    };
-
-    // 4. Add the existing local stream to the new connection
-    if (localStream) {
-      newPeerConnection.addStream(localStream);
+  function leave(notify = true) {
+    console.log("Leave function called.");
+    
+    // 1. Notify the other peer that you are hanging up
+    if (notify && socketRef.current) {
+      socketRef.current.emit('hangupCall', {
+        targetId: otherUserIdRef.current,
+        senderId: callerId 
+      });
     }
     
-    // 5. Set the new connection to the ref
-    peerConnection.current = newPeerConnection;
-
-    // 6. Reset UI state
+    // 2. Close the current peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
+    
+    // 3. Reset the UI state to go back to the join screen
     setRemoteStream(null);
+    setOtherUserId(null); // Also reset the other user's ID
     setType('JOIN');
+
+    // 4. Rebuild socket and peer connection for next call
+    setResetNonce(prevNonce => prevNonce + 1);
   }
 
+
   const JoinScreen = () => {
-    // Unchanged...
     return (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -329,10 +399,8 @@ export default function App({}) {
                 </Text>
                 <TextInputContainer
                   placeholder={'Enter Caller ID'}
-                  value={otherUserId.current}
-                  setValue={text => {
-                    otherUserId.current = text;
-                  }}
+                  value={otherUserId}
+                  setValue={setOtherUserId}
                   keyboardType={'number-pad'}
                 />
                 <TouchableOpacity
@@ -412,7 +480,7 @@ export default function App({}) {
                 color: '#ffff',
                 letterSpacing: 6,
               }}>
-              {otherUserId.current}
+              {otherUserId}
             </Text>
           </View>
           <View
@@ -423,8 +491,8 @@ export default function App({}) {
             <TouchableOpacity
               onPress={() => {
                 setType('JOIN');
-                otherUserId.current = null;
-                leave(); // Make sure to call leave to clean up
+                setOtherUserId(null) 
+                leave(true); // Make sure to call leave to clean up
               }}
               style={{
                 backgroundColor: '#FF5D5D',
@@ -463,7 +531,7 @@ export default function App({}) {
                 marginTop: 12,
                 color: '#ffff',
               }}>
-              {otherUserId.current} is calling..
+              {otherUserId} is calling..
             </Text>
           </View>
           <View
@@ -548,7 +616,7 @@ export default function App({}) {
             <IconContainer
               backgroundColor={'red'}
               onPress={() => {
-                leave();
+                leave(true);
               }}
               Icon={() => {
                 return <CallEnd height={26} width={26} fill="#FFF" />;
@@ -609,6 +677,7 @@ export default function App({}) {
     // Settings Menu Component
   const SettingsMenu = ({ isVisible, onClose, onSave }) => {
     const [tempAddress, setTempAddress] = useState(socketAddress);
+    const [tempCallerId, setTempCallerId] = useState(callerId); 
     const slideAnim = useRef(new Animated.Value(width)).current;
 
     useEffect(() => {
@@ -620,7 +689,7 @@ export default function App({}) {
     }, [isVisible, slideAnim]);
 
     const handleSave = () => {
-      onSave(tempAddress);
+      onSave(tempAddress, tempCallerId);
       onClose();
     };
 
@@ -684,6 +753,20 @@ export default function App({}) {
               setValue={setTempAddress}
               keyboardType={'default'}
             />
+            <Text style={{
+              color: '#D0D4DD',
+              fontSize: 16,
+              marginBottom: 10,
+            }}>
+              Your Fixed Caller ID
+            </Text>
+            <TextInputContainer
+              placeholder={'Enter a fixed ID'}
+              value={tempCallerId}
+              setValue={setTempCallerId}
+              keyboardType={'number-pad'}
+            />
+
             <TouchableOpacity
               onPress={handleSave}
               style={{
@@ -733,12 +816,18 @@ export default function App({}) {
         <SettingsMenu
           isVisible={isMenuVisible}
           onClose={() => setIsMenuVisible(false)}
-          onSave={async (newAddress) => {
+          onSave={async (newAddress, newCallerId) => {
             try {
               await AsyncStorage.setItem('SOCKET_ADDRESS', newAddress);
               setSocketAddress(newAddress);
             } catch (e) {
               console.warn('Failed to save socket address', e);
+            }
+            try {
+              await AsyncStorage.setItem('SAVED_CALLER_ID', newCallerId);
+              setCallerId(newCallerId);
+            } catch (e) {
+              console.warn('Failed to save caller id', e)
             }
             setIsMenuVisible(false);
           }}
