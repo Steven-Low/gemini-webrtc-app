@@ -12,7 +12,7 @@ Are you frustrated with all those paid api keys or plan? What the hell PipeCat b
 >- **Automatic Gain Control (AGC)**: Adjust the volume and output (from client side)
 >- **Noise Suppression**: Reduce background noise
 >- **Tool Use**: Both synchronous and asynchronous function calling is available
->- ...
+>- **[NEW] Open Wake Word**: Can wake up anytime or switch into active standby mode
 
 
 ---
@@ -28,7 +28,7 @@ Are you frustrated with all those paid api keys or plan? What the hell PipeCat b
 Clone the repository to your local environment.
 
 ```js
-git clone https://github.com/Steven-Low/react-native-webrtc-app
+git clone https://github.com/Steven-Low/gemini-webrtc-app.git
 ```
 
 ### Server Setup
