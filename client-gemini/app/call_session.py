@@ -1,5 +1,8 @@
+import logging
 from .webrtc import WebRTCManager
 from .gemini import GeminiSessionManager
+
+LOGGER = logging.getLogger(__name__)
 
 class CallSession:
     """
@@ -7,7 +10,7 @@ class CallSession:
     It manages its own WebRTC and Gemini instances.
     """
     def __init__(self, remote_user_id, signaling_client, on_cleanup_callback):
-        print(f"SESSION [{remote_user_id}]: Creating new call session.")
+        LOGGER.debug(f"{remote_user_id}: Creating new call session.")
         self.remote_user_id = remote_user_id
         self.signaling_client = signaling_client
         self.on_cleanup_callback = on_cleanup_callback # To notify the main app when this session ends
@@ -44,18 +47,18 @@ class CallSession:
         await self.signaling_client.send_ice_candidate(self.remote_user_id, candidate)
 
     async def initiate_call(self):
-        print(f"SESSION [{self.remote_user_id}]: Initiating outbound call...")
+        LOGGER.debug(f"{self.remote_user_id}: Initiating outbound call...")
         await self.webrtc_manager.create_offer()
 
     async def cleanup(self):
         """Shuts down all resources for this session."""
         if getattr(self, "cleaned_up", False):
-            print(f"SESSION [{self.remote_user_id}]: Cleanup already performed. Skipping.")
+            LOGGER.debug(f"{self.remote_user_id}: Cleanup already performed. Skipping.")
             return
         
         self.cleaned_up = True
-        print(f"SESSION [{self.remote_user_id}]: Cleaning up...")
-        await self.signaling_client.send_hangup(self.remote_user_id)
+        LOGGER.debug(f"{self.remote_user_id}: Cleaning up...")
+        # await self.signaling_client.send_hangup(self.remote_user_id)
         await self.gemini_manager.stop_session()
         await self.webrtc_manager.close()
         # Notify the main application that this session is now over.

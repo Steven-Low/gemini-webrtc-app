@@ -61,5 +61,5 @@ class SignalingClient:
     async def send_ice_candidate(self, callee_id, candidate):
         await self.sio.emit('ICEcandidate', {'calleeId': callee_id, 'rtcMessage': {'label': candidate.sdpMLineIndex, 'id': candidate.sdpMid, 'candidate': candidate.candidate}})
 
-    async def send_hangup(self, target_id):
-        await self.sio.emit('hangupCall', {'targetId': target_id})
+    # async def send_hangup(self, target_id):
+    #     await self.sio.emit('hangupCall', {'targetId': target_id})
