@@ -37,7 +37,7 @@ git clone https://github.com/Steven-Low/react-native-webrtc-app
 
 ```js
 
-cd react-native-webrtc-app/server
+cd gemini-webrtc-app/server
 
 ```
 
@@ -60,7 +60,7 @@ npm run start
 ### Gemini Client Setup
 #### Step 1: Go to client-python folder
 ```js
-cd react-native-webrtc-app/client-python
+cd gemini-webrtc-app/client-python
 ```
 
 #### Step 2: Create & activate virtual python environment
@@ -90,7 +90,7 @@ python app.py
 
 ```js
 
-cd react-native-webrtc-app/client
+cd gemini-webrtc-app/client
 ```
 
 ### Step 2: Install the dependecies
@@ -120,6 +120,7 @@ adb devices
 ```
 
 ### Step 6: Run your Application :D
+> Before you proceed, please ensure you have setup the environment correctly: https://reactnative.dev/docs/set-up-your-environment
 ```js
 npm run android
 npm run ios

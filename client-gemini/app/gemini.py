@@ -19,7 +19,7 @@ from config import (
     GEMINI_VOICE,
     GEMINI_LANGUAGE,
     WAKE_SERVICE_HOST,
-    WAKE_SERVICE_PORT
+    WAKE_SERVICE_PORT,
 )
 
 from .homeassistant_api import turn_on_light, turn_off_light
@@ -27,7 +27,7 @@ turn_on_the_lights = {'name': 'turn_on_the_lights'}
 turn_off_the_lights = {'name': 'turn_off_the_lights'}
 wake_up = {'name': 'good_bye'}
 
-
+WAKE_WORD_MODEL = "ok_nabu.onnx"
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
@@ -98,7 +98,7 @@ class GeminiSessionManager:
         print("Initializing Gemini Live API session...")
         
         try: 
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__), "ok_nabu.onnx")])
+            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__), WAKE_WORD_MODEL)])
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
             while True:
                 gemini_config = types.LiveConnectConfig(
