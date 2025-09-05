@@ -13,7 +13,7 @@ class CallSession:
         LOGGER.debug(f"{remote_user_id}: Creating new call session.")
         self.remote_user_id = remote_user_id
         self.signaling_client = signaling_client
-        self.on_cleanup_callback = on_cleanup_callback # To notify the main app when this session ends
+        self.on_cleanup_callback = on_cleanup_callback  
 
         # Each session gets its own, isolated managers.
         self.gemini_manager = GeminiSessionManager(self.remote_user_id)

@@ -30,6 +30,7 @@ wake_up = {'name': 'good_bye'}
 
 WAKE_WORD_MODEL = "ok_nabu.onnx"
 WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
+WAKE_THRESHOLD = 0.6
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
@@ -278,9 +279,9 @@ class GeminiSessionManager:
                             chunk = self.wake_buffer[:WAKE_BUFFER]
                             self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
 
-                            prediction = self.wakeword_model.predict(chunk)
+                            prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
                             for mdl, scores in self.wakeword_model.prediction_buffer.items():
-                                if scores[-1] > 0.5:  # threshold
+                                if scores[-1] > WAKE_THRESHOLD:   
                                     LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
                                     self.wakeword_model.prediction_buffer.clear()
                                     self.wake_buffer = np.array([], dtype=np.int16)
