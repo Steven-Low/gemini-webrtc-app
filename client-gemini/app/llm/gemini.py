@@ -1,18 +1,17 @@
 # app/gemini.py
 import asyncio
 import os
-import sys
 from google import genai
 from google.genai import types
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
 import numpy as np
 from openwakeword.model import Model
-from .homeassistant_api import turn_on_light, turn_off_light
-from config import (
+from app.llm.base import BaseLLMManager
+from app.services.homeassistant_api import turn_on_light, turn_off_light
+from app.config.constants import (
     GEMINI_SAMPLE_RATE, 
     CONF_CHAT_MODEL, 
-    BYTES_PER_SAMPLE, 
     CHUNK_SIZE_BYTES,
     CHUNK_DURATION_MS,
     GEMINI_API_VERSION, 
@@ -69,18 +68,21 @@ Conflict Resolution: If search results present conflicting information, acknowle
 Iterative Search: Conduct multiple searches (up to [Number]) per turn, refining your queries based on user feedback.
 """
  
-class GeminiSessionManager:
+class GeminiClientManager(BaseLLMManager):
     def __init__(self, remote_user_id):
+        super().__init__()
+        self.llm_name = "gemini"
         self.session = None
         self.remote_user_id = remote_user_id
         self.tasks = []
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
         self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
-        self.session_handle = None
-        self.interrupt_enabled = True
         self.wakeword_model = None
+        self.session_handle = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
-        self.is_wake = asyncio.Event() 
+
+        self.is_wake = asyncio.Event()
+        self.interrupt_enabled = True
 
     #TODO: Handle video frames
     async def start_video_processing(self, webrtc_track): 

@@ -1,6 +1,6 @@
 # app/cli.py
 import asyncio
-from config import MAX_SESSIONS 
+from app.config.constants import MAX_SESSIONS 
 
 class CLIHandler:
     def __init__(self, app):

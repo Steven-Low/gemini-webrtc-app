@@ -1,7 +1,6 @@
 # app/signaling.py
-import asyncio
 import socketio
-from config import SIGNALING_SERVER_URL
+from app.config.constants import SIGNALING_SERVER_URL
 
 class SignalingClient:
     def __init__(self):
