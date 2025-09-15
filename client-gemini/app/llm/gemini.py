@@ -15,7 +15,7 @@ from app.config.constants import (
     CHUNK_SIZE_BYTES,
     CHUNK_DURATION_MS,
     GEMINI_API_VERSION, 
-    GEMINI_VOICE,
+    GEMINI_VOICE, 
     GEMINI_LANGUAGE,
 )
 
@@ -102,7 +102,7 @@ class GeminiClientManager(BaseLLMManager):
         LOGGER.info(">>>>>>> Initializing Gemini Live API session <<<<<<<")
         
         try: 
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"openwakeword", WAKE_WORD_MODEL)])
+            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"../assets/openwakeword", WAKE_WORD_MODEL)])
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
             while True:
                 gemini_config = types.LiveConnectConfig(
@@ -188,6 +188,11 @@ class GeminiClientManager(BaseLLMManager):
             LOGGER.debug("Playback manager cancelled.")
 
     async def _play_audio(self, full_audio_buffer: bytes):
+        """
+        Put fix-sized audio chunks to the audio playback queue which is then
+        exposed to webrtc to consume. Without sleep, the webrtc audio parser
+        will not process correctly.
+        """
         for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
             chunk = full_audio_buffer[i:i + CHUNK_SIZE_BYTES]
             if not chunk:
