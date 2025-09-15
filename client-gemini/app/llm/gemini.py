@@ -140,13 +140,12 @@ class GeminiClientManager(BaseLLMManager):
                         self.tasks = [send_task, receive_task, playback_task]
                         await asyncio.gather(*self.tasks)
                          
-                except Exception as e:
-                    LOGGER.debug("Session timeout: %s", e)
+                except TimeoutError as e:
+                    LOGGER.error("Session timeout: %s", e)
                     await self.stop_session()
-                    
-                finally:
-                    LOGGER.debug(f"Gemini session has ended cleanly.")
-                    break 
+                except Exception as e:
+                    LOGGER.error("Gemini loop has ended: %s", e)
+                    raise
 
         except Exception as e:
             LOGGER.error("Gemini session has ended unexpectedly: %s", e)
