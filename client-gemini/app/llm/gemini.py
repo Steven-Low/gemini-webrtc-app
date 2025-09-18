@@ -30,6 +30,8 @@ wake_up = {'name': 'good_bye'}
 WAKE_WORD_MODEL = "ok_nabu.onnx"
 WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
 WAKE_THRESHOLD = 0.6
+DEBOUNCE_TIME = 2
+
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
@@ -80,6 +82,7 @@ class GeminiClientManager(BaseLLMManager):
         self.wakeword_model = None
         self.session_handle = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
+        self.last_wake_time = 0
 
         self.is_wake = asyncio.Event()
         self.interrupt_enabled = True
@@ -144,8 +147,14 @@ class GeminiClientManager(BaseLLMManager):
                     LOGGER.error("Session timeout: %s", e)
                     await self.stop_session()
                 except Exception as e:
-                    LOGGER.error("Gemini loop has ended: %s", e)
-                    raise
+                    error_msg = str(e)
+                    if "BidiGenerateContent session not found" in error_msg:
+                        LOGGER.warning("Gemini session invalid. Restarting...")
+                        self.session_handle = None
+                        await self.stop_session()
+                    else:
+                        LOGGER.error("Fatal Gemini error: %s", e)
+                        raise
 
         except Exception as e:
             LOGGER.error("Gemini session has ended unexpectedly: %s", e)
@@ -243,7 +252,8 @@ class GeminiClientManager(BaseLLMManager):
                                 result = turn_off_light()
                             elif fc.name == "good_bye":
                                 self.is_wake.clear()
-                                result = self.is_wake.is_set()
+                                result = True
+                                self.last_wake_time = asyncio.get_event_loop().time() # Reset last wake time
                             else:
                                 result = {"error": f"Unknown function: {fc.name}"}
 
@@ -291,7 +301,12 @@ class GeminiClientManager(BaseLLMManager):
                                     LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
                                     self.wakeword_model.prediction_buffer.clear()
                                     self.wake_buffer = np.array([], dtype=np.int16)
-                                    self.is_wake.set()
+                                    current_time = asyncio.get_event_loop().time()
+                                    if current_time - self.last_wake_time > DEBOUNCE_TIME:  # Debounce for 2 seconds
+                                        self.is_wake.set()
+                                        self.last_wake_time = current_time
+                                    else:
+                                        LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
                                     break
 
                             if self.is_wake.is_set():
