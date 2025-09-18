@@ -1,24 +1,62 @@
-# Gemini WebRTC React Native App with Signalling
+# Gemini Live WebRTC React Native App with Signalling
 Are you frustrated with all those paid api keys or plan? What the hell PipeCat by Daily? (Restrict my plan to 168 hours per month?) I want my super intelligence AI to be slaved 24/7 and no bill!
+> News
+> https://developers.googleblog.com/en/gemini-2-0-level-up-your-apps-with-real-time-multimodal-interactions/
+> Congratulation, all developers have been sold to Daily. 
 
 <img src="./public/gemini-webrtc.png" />
 
-> ### Why Choosing Gemini Live Api Plus Webrtc?
->- **Fast Response Time < 0.5s** : Almost identical to talking or response to people in real
->- **Integrated VAD**: Voice Activity Detection on gemini socket fast and accurate
->- **Interrupt detection**: The response stream can be interrupted through VAD 
->- **Free to use** : The live model can has at most 3 concurrent session lasting forever
->- **Echo Cancellation**: The speaker and microphone will not interfere
->- **Automatic Gain Control (AGC)**: Adjust the volume and output (from client side)
->- **Noise Suppression**: Reduce background noise
->- **Tool Use**: Both synchronous and asynchronous function calling is available
->- **[NEW] Open Wake Word**: Can wake up anytime or switch into active standby mode
+### Why Choosing Gemini Live Api Plus Webrtc?
+- **Fast Response Time < 0.5s** : Almost identical to talking or response to people in real
+- **Integrated VAD**: Voice Activity Detection on gemini socket fast and accurate
+- **Interrupt detection**: The response stream can be interrupted through VAD 
+- **Free to use** : The live model can has at most 3 concurrent session lasting forever
+- **Echo Cancellation**: The speaker and microphone will not interfere
+- **Automatic Gain Control (AGC)**: Adjust the volume and output (from client side)
+- **Noise Suppression**: Reduce background noise
+- **Tool Use**: Both synchronous and asynchronous function calling is available
+- **[NEW] Open Wake Word**: Can wake up anytime or switch into active standby mode
 
+```
+
+                                 ┌─────────────────────────────────────────┐     
+                                 │                                         │     
+                                 │ Server                                  │     
+                                 │                                         │     
+                                 │                                         │     
+                                 │                 ┌────────────────────┐  │     
+                                 │                 │                    │  │     
+                                 │                 │  Custom            │  │     
+                                 │                 │  Pipeline          │  │     
+                                 │                 │                    │  │     
+                                 │                 │                    │  │     
+┌──────────────────────────┐     │                 │  Audio Processing  │  │     
+│                          │     │                 │         ▼          │  │     
+│       React Client       │     │   ┌─────────────│   Gemini Flash    ─┼──┼────►
+│    ┌───────────────┐     │     │   │             │   Transcription   ◄┼──┼─────
+│    │ WebRTC (Clean)│ ────┼────────►│   WebRTC    │         ▼          │  │     
+│    │   Transport   │ ◄───┼─────────│  Transport  │  Gemini Multimodal─┼──┼────►
+│    └───────────────┘     │     │   │             │     Live API      ◄┼──┼─────
+│                          │     │   └─────────────│         ▼          │  │     
+└──────────────────────────┘     │                 │   Gemini Flash    ─┼──┼────►
+                                 │                 │   Transcription   ◄┼──┼─────
+                                 │                 │         ▼          │  │     
+                                 │                 │   Conversation     │  │     
+                                 │                 │     Context        │  │     
+                                 │                 │    Management      │  │     
+                                 │                 │         ▼          │  │     
+                                 │                 │   RTVI Events      │  │     
+                                 │                 │                    │  │     
+                                 │                 └────────────────────┘  │     
+                                 │                                         │     
+                                 └─────────────────────────────────────────┘  
+```
 
 ---
 
 ## Roadmap
 - [x] Establish client <--> gemini client <--> gemini websocket connection for 24/7
+- [ ] Standalone docker installation
 - [ ] Home Assistant Integration
 
 

@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useRef, useMemo} from 'react'; // BUG 2 FIX: Imported useMemo
+import {useEffect, useState, useRef } from 'react'; // BUG 2 FIX: Imported useMemo
 import {
   Platform,
   KeyboardAvoidingView,
@@ -150,11 +150,11 @@ export default function App({}) {
     peerConnectionRef.current = pc;
 
     const socket = SocketIOClient(socketAddress, {
-      transports: ['websocket'],
+      transports: ['websocket'], 
       query: { callerId },
     });
-    socketRef.current = socket;
 
+    socketRef.current = socket;
     
     // WebRTC Listeners
     pc.onaddstream = event => {
@@ -215,6 +215,11 @@ export default function App({}) {
       });
 
     // Socket Listeners
+    socket.on("connect", () => {
+      console.log("Connected!", socket.id);
+      console.log(socketRef.current)
+    });
+
     socket.on('newCall', data => {
       if (appState.current.match(/inactive|background/)) {
         PushNotification.localNotification({

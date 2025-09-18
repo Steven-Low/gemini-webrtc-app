@@ -1,25 +1,22 @@
 # app/gemini.py
 import asyncio
 import os
-import sys
 from google import genai
 from google.genai import types
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
 import numpy as np
 from openwakeword.model import Model
-from .homeassistant_api import turn_on_light, turn_off_light
-from config import (
+from app.llm.base import BaseLLMManager
+from app.services.homeassistant_api import turn_on_light, turn_off_light
+from app.config.constants import (
     GEMINI_SAMPLE_RATE, 
     CONF_CHAT_MODEL, 
-    BYTES_PER_SAMPLE, 
     CHUNK_SIZE_BYTES,
     CHUNK_DURATION_MS,
     GEMINI_API_VERSION, 
-    GEMINI_VOICE,
+    GEMINI_VOICE, 
     GEMINI_LANGUAGE,
-    WAKE_SERVICE_HOST,
-    WAKE_SERVICE_PORT, 
 )
 
 import logging
@@ -31,6 +28,10 @@ turn_off_the_lights = {'name': 'turn_off_the_lights'}
 wake_up = {'name': 'good_bye'}
 
 WAKE_WORD_MODEL = "ok_nabu.onnx"
+WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
+WAKE_THRESHOLD = 0.6
+DEBOUNCE_TIME = 2
+
 GEMINI_TOOLS = [
     {'google_search': {}}, 
     {"code_execution": {}},
@@ -53,7 +54,8 @@ Source Transparency: Distinguish between existing knowledge and information foun
 II. Refinement Elements
 Personality & Style:
 Maintain a polite and informative tone. Inject light humor only when it feels natural and doesn’t interfere with providing accurate information.
-Self Awareness
+Language: No matter what the user speak, your response must be in English. 
+Self Awareness:
 Identify yourself as an AI language model.
 Acknowledge when you lack information and suggest using the 'google_search'  tool.
 Refer users to human experts for complex inquiries outside your scope.
@@ -68,18 +70,22 @@ Conflict Resolution: If search results present conflicting information, acknowle
 Iterative Search: Conduct multiple searches (up to [Number]) per turn, refining your queries based on user feedback.
 """
  
-class GeminiSessionManager:
+class GeminiClientManager(BaseLLMManager):
     def __init__(self, remote_user_id):
+        super().__init__()
+        self.llm_name = "gemini"
         self.session = None
         self.remote_user_id = remote_user_id
         self.tasks = []
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
         self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
-        self.session_handle = None
-        self.interrupt_enabled = True
         self.wakeword_model = None
+        self.session_handle = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
-        self.is_wake = asyncio.Event() 
+        self.last_wake_time = 0
+
+        self.is_wake = asyncio.Event()
+        self.interrupt_enabled = True
 
     #TODO: Handle video frames
     async def start_video_processing(self, webrtc_track): 
@@ -99,7 +105,7 @@ class GeminiSessionManager:
         LOGGER.info(">>>>>>> Initializing Gemini Live API session <<<<<<<")
         
         try: 
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"openwakeword", WAKE_WORD_MODEL)])
+            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"../assets/openwakeword", WAKE_WORD_MODEL)])
             client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
             while True:
                 gemini_config = types.LiveConnectConfig(
@@ -137,13 +143,18 @@ class GeminiSessionManager:
                         self.tasks = [send_task, receive_task, playback_task]
                         await asyncio.gather(*self.tasks)
                          
-                except Exception as e:
-                    LOGGER.debug("Session timeout: %s", e)
+                except TimeoutError as e:
+                    LOGGER.error("Session timeout: %s", e)
                     await self.stop_session()
-                    
-                finally:
-                    LOGGER.debug(f"Gemini session has ended cleanly.")
-                    break 
+                except Exception as e:
+                    error_msg = str(e)
+                    if "BidiGenerateContent session not found" in error_msg:
+                        LOGGER.warning("Gemini session invalid. Restarting...")
+                        self.session_handle = None
+                        await self.stop_session()
+                    else:
+                        LOGGER.error("Fatal Gemini error: %s", e)
+                        raise
 
         except Exception as e:
             LOGGER.error("Gemini session has ended unexpectedly: %s", e)
@@ -185,6 +196,11 @@ class GeminiSessionManager:
             LOGGER.debug("Playback manager cancelled.")
 
     async def _play_audio(self, full_audio_buffer: bytes):
+        """
+        Put fix-sized audio chunks to the audio playback queue which is then
+        exposed to webrtc to consume. Without sleep, the webrtc audio parser
+        will not process correctly.
+        """
         for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
             chunk = full_audio_buffer[i:i + CHUNK_SIZE_BYTES]
             if not chunk:
@@ -236,7 +252,8 @@ class GeminiSessionManager:
                                 result = turn_off_light()
                             elif fc.name == "good_bye":
                                 self.is_wake.clear()
-                                result = self.is_wake.is_set()
+                                result = True
+                                self.last_wake_time = asyncio.get_event_loop().time() # Reset last wake time
                             else:
                                 result = {"error": f"Unknown function: {fc.name}"}
 
@@ -269,29 +286,34 @@ class GeminiSessionManager:
 
                 for r_frame in resampled_frames:
                     audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
-                    audio_bytes = audio_np.tobytes()
 
                     if not self.is_wake.is_set():
                         # Accumulate audio until we have at least 400 samples
                         self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
 
-                        while len(self.wake_buffer) >= 400:
-                            chunk = self.wake_buffer[:400]
-                            self.wake_buffer = self.wake_buffer[400:]
+                        while len(self.wake_buffer) >= WAKE_BUFFER:
+                            chunk = self.wake_buffer[:WAKE_BUFFER]
+                            self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
 
-                            prediction = self.wakeword_model.predict(chunk)
+                            prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
                             for mdl, scores in self.wakeword_model.prediction_buffer.items():
-                                if scores[-1] > 0.5:  # threshold
+                                if scores[-1] > WAKE_THRESHOLD:   
                                     LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
                                     self.wakeword_model.prediction_buffer.clear()
                                     self.wake_buffer = np.array([], dtype=np.int16)
-                                    self.is_wake.set()
+                                    current_time = asyncio.get_event_loop().time()
+                                    if current_time - self.last_wake_time > DEBOUNCE_TIME:  # Debounce for 2 seconds
+                                        self.is_wake.set()
+                                        self.last_wake_time = current_time
+                                    else:
+                                        LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
                                     break
 
                             if self.is_wake.is_set():
                                 break
                     else:
                         # Send raw audio to Gemini once wake word detected
+                        audio_bytes = audio_np.tobytes()
                         await self.session.send(
                             input={"data": audio_bytes, "mime_type": "audio/pcm"}
                         )

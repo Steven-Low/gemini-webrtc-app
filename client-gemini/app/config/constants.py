@@ -12,13 +12,13 @@ GEMINI_VOICE = "Puck" # Orus | Kore | Puck | Charon | Fenrir | Aoede | Leda | Ze
 GEMINI_LANGUAGE = "en-US" # en-US | en-UK | ko-KR | ta-IN | ja-JP | fr-FR
 MAX_SESSIONS = 3
 
-# --- WebRTC Audio ---
-WEBRTC_SAMPLE_RATE = 24000
-WEBRTC_TIME_BASE = fractions.Fraction(1, WEBRTC_SAMPLE_RATE)
-SAMPLES_PER_FRAME = int(WEBRTC_SAMPLE_RATE * 0.02) # 20ms frame
+# --- Gemini WebRTC Audio ---
+GEMINI_WEBRTC_SAMPLE_RATE = 24000
 BYTES_PER_SAMPLE = 2
 CHUNK_DURATION_MS = 20
-CHUNK_SIZE_BYTES = int((WEBRTC_SAMPLE_RATE * (CHUNK_DURATION_MS / 1000)) * BYTES_PER_SAMPLE)
+WEBRTC_TIME_BASE = fractions.Fraction(1, GEMINI_WEBRTC_SAMPLE_RATE)
+SAMPLES_PER_FRAME = int(GEMINI_WEBRTC_SAMPLE_RATE * 0.02) # 20ms frame
+CHUNK_SIZE_BYTES = int((GEMINI_WEBRTC_SAMPLE_RATE * (CHUNK_DURATION_MS / 1000)) * BYTES_PER_SAMPLE)
 
 # --- STUN Servers ---
 ICE_SERVERS = [
@@ -26,7 +26,3 @@ ICE_SERVERS = [
     {"urls": "stun:stun1.l.google.com:19302"},
     {"urls": "stun:stun2.l.google.com:19302"},
 ]
-
-# --- Open wake word ---
-WAKE_SERVICE_HOST = "10.10.10.142"
-WAKE_SERVICE_PORT = "10400"

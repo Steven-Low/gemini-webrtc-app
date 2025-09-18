@@ -1,17 +1,17 @@
-import asyncio
 import logging
-from .signaling import SignalingClient
-from .call_session import CallSession  
-from .cli import CLIHandler
-from config import MAX_SESSIONS
+from app.core.signaling import SignalingClient
+from app.core.cli import CLIHandler
+from app.config.constants import MAX_SESSIONS
+from app.config.factories import create_call_session
 
 LOGGER = logging.getLogger(__name__)
 
-class Application:
+class GeminiApp:
     def __init__(self):
-        self.main_caller_id = "666666" # The public "reception" ID
-        self.active_sessions = {}      # Store active call session via remote user id key
+        self.main_caller_id = "666666"  
+        self.active_sessions = {}      
         self.signaling_client = SignalingClient()
+        self.llm_name = "gemini"
         self.cli = CLIHandler(self)   
         self._wire_signaling()
 
@@ -34,10 +34,11 @@ class Application:
             LOGGER.warning(f"At max capacity ({MAX_SESSIONS} calls). Rejecting call from {caller_id}.")
             return
 
-        session = CallSession(
+        session = create_call_session(
             remote_user_id=caller_id,
             signaling_client=self.signaling_client,
-            on_cleanup_callback=self.remove_session
+            on_cleanup_callback=self.remove_session,
+            llm_name=self.llm_name
         )
         self.active_sessions[caller_id] = session
         await session.webrtc_manager.handle_remote_offer(rtc_message)
@@ -83,10 +84,11 @@ class Application:
             return
 
         LOGGER.info(f"Creating new session for outbound call to {target_id}.")
-        session = CallSession(
+        session = create_call_session(
             remote_user_id=target_id,
             signaling_client=self.signaling_client,
-            on_cleanup_callback=self.remove_session
+            on_cleanup_callback=self.remove_session,
+            llm_name=self.llm_name
         )
         self.active_sessions[target_id] = session
         

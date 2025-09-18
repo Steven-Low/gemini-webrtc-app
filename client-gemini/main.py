@@ -4,8 +4,10 @@ import logging
 import argparse
 import sys
 from dotenv import load_dotenv
-from app.application import Application
+from pathlib import Path
+from app.app import GeminiApp
 
+sys.path.append(str(Path(__file__).resolve().parent))
 
 def setup_logger(debug: bool):
     logging.basicConfig(
@@ -29,7 +31,7 @@ async def main():
     LOGGER = setup_logger(args.debug)
 
     load_dotenv()
-    app = Application()
+    app = GeminiApp()
 
     LOGGER.info("Starting Application...")
     await app.run()
