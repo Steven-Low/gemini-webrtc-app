@@ -3,8 +3,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
-import sys
 from collections import deque
 from typing import Dict, Deque, Any
 
@@ -21,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 # ----------------------------
 WAKE_WORD_MODEL = os.environ.get("WAKE_WORD_MODEL", "ok_nabu.onnx")
 HOST = os.environ.get("WAKE_HOST", "0.0.0.0")
-PORT = int(os.environ.get("WAKE_PORT", "8001"))
+PORT = int(os.environ.get("WAKE_PORT", "12201"))
 SAMPLE_RATE = int(os.environ.get("WAKE_SAMPLE_RATE", "16000"))
 
 # Window settings: 80 ms window @ 16kHz = 1280 samples (default used by Rhasspy)
@@ -43,7 +41,7 @@ app = FastAPI(title="WakeWord WebSocket Server (with moving-average filter)")
 
 # load model eagerly
 try:
-    model_path = os.path.join(os.path.dirname(__file__), WAKE_WORD_MODEL)
+    model_path = os.path.join(os.path.dirname(__file__), "models", WAKE_WORD_MODEL)
     LOGGER.info("Loading wakeword model from %s", model_path)
     _MODEL: Model = Model(
         vad_threshold=0.0,  # keep default unless you want different
