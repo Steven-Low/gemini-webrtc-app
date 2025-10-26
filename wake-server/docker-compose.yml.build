@@ -1,8 +1,11 @@
 version: "3.9"
 services:
   wake-server:
-    container_name: openwakeword-websocket
-    image: johnlow2025/openwakeword-websocket:latest
+    container_name: wakeword-server 
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    image: wakeword-server:latest
     ports:
       - "12201:12201"
     environment:

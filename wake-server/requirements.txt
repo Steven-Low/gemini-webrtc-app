@@ -1,4 +1,4 @@
 fastapi 
-uvicorn[standard]==0.30.6
+uvicorn[standard] 
 numpy 
 openwakeword 

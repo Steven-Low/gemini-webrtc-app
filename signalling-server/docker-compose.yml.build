@@ -1,11 +1,13 @@
 version: '3.9'
 
 services:
-  signalling-server:
+  web:
     container_name: webrtc_signalling_server
-    image: johnlow2025/webrtc-signalling-server
+    build: .
     restart: unless-stopped
     ports:
       - "3500:3500"
+    volumes:
+      - .:/app       # optional: enables live code editing during dev
     environment:
       - PORT=3500
