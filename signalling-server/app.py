@@ -4,7 +4,7 @@ from flask_socketio import SocketIO, join_room, emit, disconnect
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='static')
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 # A simple dictionary to map SocketIO session IDs (sid) to user IDs (callerId)
 socketio.sid_to_user_map = {}
@@ -168,5 +168,5 @@ def handle_disconnect():
 # --- Main execution block ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3500))
-    print(f"Server starting on {os.environ.get('HOSTNAME', 'Unknown host') or os.uname().nodename}:{port}")
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    print(f"Server starting on 0.0.0.0:{port}")
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)

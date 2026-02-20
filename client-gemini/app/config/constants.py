@@ -2,11 +2,11 @@
 import fractions
 
 # --- Signaling Server ---
-SIGNALING_SERVER_URL = "http://10.10.10.124:3500"
+SIGNALING_SERVER_URL = "http://10.10.10.130:3500"
 
 # --- Gemini API ---
 GEMINI_SAMPLE_RATE = 16000
-CONF_CHAT_MODEL = "gemini-live-2.5-flash-preview"  # "gemini-live-2.5-flash-preview" | gemini-2.0-flash-live-001
+CONF_CHAT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"  # DEPRECATED: "gemini-live-2.5-flash-preview" | gemini-2.0-flash-live-001
 GEMINI_API_VERSION = "v1alpha" #"v1beta"
 GEMINI_VOICE = "Puck" # Orus | Kore | Puck | Charon | Fenrir | Aoede | Leda | Zephyr
 GEMINI_LANGUAGE = "en-US" # en-US | en-UK | ko-KR | ta-IN | ja-JP | fr-FR

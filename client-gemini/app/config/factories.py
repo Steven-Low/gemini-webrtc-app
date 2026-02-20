@@ -1,5 +1,5 @@
 from app.llm.gemini import GeminiClientManager
-from app.models.gemini_track import GeminiOutputTrack
+from app.domain.gemini_track import GeminiOutputTrack
 from app.core.call_session import CallSession
 
 LLM_MANAGERS = {

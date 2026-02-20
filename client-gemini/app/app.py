@@ -1,4 +1,5 @@
 import logging
+import aiohttp
 from app.core.signaling import SignalingClient
 from app.core.cli import CLIHandler
 from app.config.constants import MAX_SESSIONS
@@ -123,6 +124,6 @@ class GeminiApp:
             await self.signaling_client.connect(self.main_caller_id)
             await self.cli.loop() # Assuming the CLI now calls hang_up with a specific ID
         except Exception as e:
-            LOGGER.error(f"An error occurred in the application: {e}")
+            LOGGER.error(f"Unexpected error occurred in the application: {e}")
         finally:
             await self.shutdown()
