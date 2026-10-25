@@ -1,15 +1,13 @@
 # config.py
 import fractions
+import os
 
 # --- Signaling Server ---
-SIGNALING_SERVER_URL = "http://10.10.10.124:3500"
+SIGNALING_SERVER_URL = os.getenv("SIGNALING_SERVER_URL", "http://10.10.10.116:3500")
 
 # --- Gemini API ---
 GEMINI_SAMPLE_RATE = 16000
-CONF_CHAT_MODEL = "gemini-live-2.5-flash-preview"  # "gemini-live-2.5-flash-preview" | gemini-2.0-flash-live-001
-GEMINI_API_VERSION = "v1alpha" #"v1beta"
-GEMINI_VOICE = "Puck" # Orus | Kore | Puck | Charon | Fenrir | Aoede | Leda | Zephyr
-GEMINI_LANGUAGE = "en-US" # en-US | en-UK | ko-KR | ta-IN | ja-JP | fr-FR
+CONF_CHAT_MODEL = "gemini-3.5-flash-lite"
 MAX_SESSIONS = 3
 
 # --- Gemini WebRTC Audio ---

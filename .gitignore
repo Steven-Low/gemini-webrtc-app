@@ -2,6 +2,6 @@
 ./client-gemini/__pycache__
 client-gemini/app/__pycache__/
 client-gemini/app/*/__pycache__
+client-gemini/debug_audio/
 signalling-server-js
 .env
-

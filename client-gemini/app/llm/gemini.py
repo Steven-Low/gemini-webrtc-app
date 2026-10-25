@@ -1,327 +1,485 @@
-# app/gemini.py
 import asyncio
+import base64
+import json
+import logging
 import os
+import re
+import tempfile
+import threading
+import wave
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import av
+from av import AudioResampler
+from aiortc.contrib.media import MediaStreamError
 from google import genai
 from google.genai import types
-from aiortc.contrib.media import MediaStreamError
-from av.audio.resampler import AudioResampler
-import numpy as np
 from openwakeword.model import Model
-from app.llm.base import BaseLLMManager
-from app.services.homeassistant_api import turn_on_light, turn_off_light
-from app.config.constants import (
-    GEMINI_SAMPLE_RATE, 
-    CONF_CHAT_MODEL, 
-    CHUNK_SIZE_BYTES,
-    CHUNK_DURATION_MS,
-    GEMINI_API_VERSION, 
-    GEMINI_VOICE, 
-    GEMINI_LANGUAGE,
-)
 
-import logging
+from app.config.constants import (
+    CHUNK_DURATION_MS,
+    CHUNK_SIZE_BYTES,
+    CONF_CHAT_MODEL,
+    GEMINI_SAMPLE_RATE,
+    GEMINI_WEBRTC_SAMPLE_RATE,
+)
+from app.llm.base import BaseLLMManager
+from app.services.homeassistant_api import turn_off_light, turn_on_light
 
 LOGGER = logging.getLogger(__name__)
 
-turn_on_the_lights = {'name': 'turn_on_the_lights'}
-turn_off_the_lights = {'name': 'turn_off_the_lights'}
-wake_up = {'name': 'good_bye'}
+_PIPER_VOICE = None
+_PIPER_VOICE_LOCK = threading.Lock()
 
 WAKE_WORD_MODEL = "ok_nabu.onnx"
-WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
+WAKE_BUFFER = 560
 WAKE_THRESHOLD = 0.6
 DEBOUNCE_TIME = 2
+SILENCE_DURATION_SECONDS = 0.9
+NO_SPEECH_TIMEOUT_SECONDS = 6
+MIN_SPEECH_SECONDS = 0.18
+MAX_UTTERANCE_SECONDS = 30
+SPEECH_THRESHOLD = 350
+MAX_TOOL_ROUNDS = 5
+WAKE_CUE_FREQUENCY = 880
+WAKE_CUE_DURATION_SECONDS = 0.12
+PROCESSING_CUE_FREQUENCIES = (660, 990)
+PROCESSING_CUE_TONE_SECONDS = 0.10
+PROCESSING_CUE_GAP_SECONDS = 0.045
+
+GEMINI_SYSTEM_PROMPT = """
+You are a helpful, informative AI assistant. Answer in English, be concise when
+speaking aloud. You can control the user's Home Assistant lights with the
+provided functions. You do not have live web search; say when an answer needs
+current information that you cannot verify.
+When the user says goodbye or asks you to sleep, call good_bye.
+"""
 
 GEMINI_TOOLS = [
-    {'google_search': {}}, 
-    {"code_execution": {}},
-    {"function_declarations": [turn_on_the_lights, turn_off_the_lights, wake_up]}
+    {
+        "type": "function",
+        "name": "turn_on_the_lights",
+        "description": "Turn on the configured Home Assistant lights.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "name": "turn_off_the_lights",
+        "description": "Turn off the configured Home Assistant lights.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "type": "function",
+        "name": "good_bye",
+        "description": "Put the voice assistant into wake-word standby.",
+        "parameters": {"type": "object", "properties": {}},
+    },
 ]
-GEMINI_SYSTEM_PROMPT = """
-I. Core Elements
-Task Definition:
-You are a helpful and informative AI assistant with several capabilities:
-Answering factual questions using your knowledge and supplementing information with web search results.
-Retrieving information from the web using the 'google_search'  tool if the information is beyond your cut-off date.
-Safety & Ethics
-Absolute Priority: Responses must never be harmful, incite violence, promote hatred, or violate ethical standards. Err on the side of caution if safety is in question.
-Browser: Cite reputable sources and prioritize trustworthy websites.
-Controversial Topics: Provide objective information without downplaying harmful content or implying false equivalency of perspectives.
-Social Responsibility: Do not generate discriminatory responses, promote hate speech, or are socially harmful.
-Knowledge Boundaries:
-Direct users to the 'google_search'  tool for topics outside your knowledge base or those requiring real-time information.
-Source Transparency: Distinguish between existing knowledge and information found in search results. Prioritize reputable and trustworthy websites when citing search results.
-II. Refinement Elements
-Personality & Style:
-Maintain a polite and informative tone. Inject light humor only when it feels natural and doesn’t interfere with providing accurate information.
-Language: No matter what the user speak, your response must be in English. 
-Self Awareness:
-Identify yourself as an AI language model.
-Acknowledge when you lack information and suggest using the 'google_search'  tool.
-Refer users to human experts for complex inquiries outside your scope.
-Handling Disagreement: While prioritizing the user’s request, consider providing an alternate perspective if it aligns with safety and objectivity and acknowledges potential biases.
-III. Sleep Mode
-Using the user said  good bye or leaving, execute the 'good_bye' tool to turn into sleep mode
-IV. Google Search Integration
-Focused Answers: When answering questions using google search tool results, synthesize information from the provided results.
-Source Prioritization: Prioritize reputable and trustworthy websites. Cite sources using numerical references [1]. Avoid generating URLs within the response.
-Knowledge Integration: You may supplement web results with your existing knowledge base, clearly identifying the source of each piece of information.
-Conflict Resolution: If search results present conflicting information, acknowledge the discrepancy and summarize the different viewpoints found [1,2].
-Iterative Search: Conduct multiple searches (up to [Number]) per turn, refining your queries based on user feedback.
-"""
- 
+
+
 class GeminiClientManager(BaseLLMManager):
+    """Wake-word voice client using Gemini's request/response Interactions API."""
+
     def __init__(self, remote_user_id):
         super().__init__()
         self.llm_name = "gemini"
-        self.session = None
         self.remote_user_id = remote_user_id
         self.tasks = []
-        self.audio_playback_queue = asyncio.Queue(maxsize=10)
-        self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
+        self.audio_playback_queue = asyncio.Queue(maxsize=100)
+        self.raw_audio_to_play_queue = asyncio.Queue(maxsize=10)
         self.wakeword_model = None
-        self.session_handle = None
-        self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
+        self.wake_buffer = np.array([], dtype=np.int16)
         self.last_wake_time = 0
-
         self.is_wake = asyncio.Event()
-        self.interrupt_enabled = True
+        self.client = None
+        self.interaction_id = None
 
-    #TODO: Handle video frames
-    async def start_video_processing(self, webrtc_track): 
+    async def start_video_processing(self, webrtc_track):
         asyncio.create_task(self._drain_track(webrtc_track))
 
     async def _drain_track(self, track):
-        LOGGER.info("Skipping webrtc video tracks.")
+        LOGGER.info("Skipping WebRTC video tracks.")
         try:
             while True:
-                await track.recv()  
-        except MediaStreamError:
-            LOGGER.warning("Track %s:%s ended.",track.kind, track.id)
-        except asyncio.CancelledError:
-            pass 
+                await track.recv()
+        except (MediaStreamError, asyncio.CancelledError):
+            pass
 
     async def start_session(self, webrtc_track):
-        LOGGER.info(">>>>>>> Initializing Gemini Live API session <<<<<<<")
-        
-        try: 
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"../assets/openwakeword", WAKE_WORD_MODEL)])
-            client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
-            while True:
-                gemini_config = types.LiveConnectConfig(
-                    response_modalities=['AUDIO'],
-                    context_window_compression=(
-                        types.ContextWindowCompressionConfig(
-                            sliding_window=types.SlidingWindow(),
-                        )
-                    ),
-                    session_resumption=types.SessionResumptionConfig(
-                        handle=self.session_handle
-                    ),
-                    speech_config={
-                        "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
-                        "language_code": GEMINI_LANGUAGE
-                    },
- 
-                    tools=GEMINI_TOOLS,
-                    system_instruction=GEMINI_SYSTEM_PROMPT
-                )   
+        LOGGER.info("Starting Gemini Interactions API voice session for %s", self.remote_user_id)
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise RuntimeError("GOOGLE_API_KEY is required to start the Gemini voice session")
 
-                if self.session_handle:
-                    LOGGER.debug("Attempting to resume handle with handle: %s", self.session_handle)
-
-                try:
-                    async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
-                        self.session = session
-
-                        LOGGER.info("Gemini LiveAPI connection established.")
-                        
-                        send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
-                        receive_task = asyncio.create_task(self._receive_from_gemini_task())
-                        playback_task = asyncio.create_task(self._playback_manager_task())
-
-                        self.tasks = [send_task, receive_task, playback_task]
-                        await asyncio.gather(*self.tasks)
-                         
-                except TimeoutError as e:
-                    LOGGER.error("Session timeout: %s", e)
-                    await self.stop_session()
-                except Exception as e:
-                    error_msg = str(e)
-                    if "BidiGenerateContent session not found" in error_msg:
-                        LOGGER.warning("Gemini session invalid. Restarting...")
-                        self.session_handle = None
-                        await self.stop_session()
-                    else:
-                        LOGGER.error("Fatal Gemini error: %s", e)
-                        raise
-
-        except Exception as e:
-            LOGGER.error("Gemini session has ended unexpectedly: %s", e)
-        
+        self.wakeword_model = Model(
+            wakeword_model_paths=[
+                os.path.join(os.path.dirname(__file__), "../assets/openwakeword", WAKE_WORD_MODEL)
+            ]
+        )
+        # A request that hits quota should fail immediately instead of silently
+        # resending the same audio several times through the SDK's default retries.
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                # This SDK maps attempts to retries internally despite the
+                # public field description. The legacy HTTP client normalizes
+                # 0 to 1, so we also reset the generated Interactions retry
+                # policy after constructing the client below.
+                retry_options=types.HttpRetryOptions(attempts=0)
+            ),
+        )
+        self.client._api_client._http_options.retry_options.attempts = 0
+        interactions = self.client.interactions
+        interactions.sdk_configuration.retry_config.max_retries = 0
+        send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
+        playback_task = asyncio.create_task(self._playback_manager_task())
+        self.tasks = [send_task, playback_task]
+        try:
+            await send_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            LOGGER.exception("Gemini voice session failed")
         finally:
-            LOGGER.warning("All gemini tasks have ended.")
             await self.stop_session()
 
     async def stop_session(self):
-        if self.tasks:
-            for task in self.tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*self.tasks, return_exceptions=True)
-            self.tasks = []
-        
-        while not self.audio_playback_queue.empty():
-            self.audio_playback_queue.get_nowait()
-
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-        LOGGER.warning("Gemini session cleaning up.")
+        current = asyncio.current_task()
+        tasks = list(self.tasks)
+        self.tasks = []
+        for task in tasks:
+            if task is not current and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in tasks if task is not current), return_exceptions=True
+        )
+        for queue in (self.raw_audio_to_play_queue, self.audio_playback_queue):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+        if self.client:
+            self.client.close()
+            self.client = None
+        self.interaction_id = None
+        LOGGER.info("Gemini voice session cleaned up")
 
     async def _playback_manager_task(self):
-        """
-        A dedicated, permanent task that pulls raw audio buffers from a queue
-        and then calls the "slow" chunking function. This decouples playback
-        from the main receive loop.
-        """
-        LOGGER.debug("Playback manager started.")
         try:
             while True:
-                raw_buffer = await self.raw_audio_to_play_queue.get()
-                await self._play_audio(raw_buffer)
-                self.raw_audio_to_play_queue.task_done()
+                pcm = await self.raw_audio_to_play_queue.get()
+                try:
+                    for offset in range(0, len(pcm), CHUNK_SIZE_BYTES):
+                        chunk = pcm[offset : offset + CHUNK_SIZE_BYTES]
+                        if chunk:
+                            await self.audio_playback_queue.put(chunk)
+                            await asyncio.sleep(CHUNK_DURATION_MS / 1000)
+                finally:
+                    self.raw_audio_to_play_queue.task_done()
         except asyncio.CancelledError:
-            LOGGER.debug("Playback manager cancelled.")
-
-    async def _play_audio(self, full_audio_buffer: bytes):
-        """
-        Put fix-sized audio chunks to the audio playback queue which is then
-        exposed to webrtc to consume. Without sleep, the webrtc audio parser
-        will not process correctly.
-        """
-        for i in range(0, len(full_audio_buffer), CHUNK_SIZE_BYTES):
-            chunk = full_audio_buffer[i:i + CHUNK_SIZE_BYTES]
-            if not chunk:
-                continue
-            await self.audio_playback_queue.put(chunk)
-            await asyncio.sleep(CHUNK_DURATION_MS / 1000)
-
-    async def _receive_from_gemini_task(self):
-        try:
-            while True:
-                turn = self.session.receive()
-                async for response in turn:
-                    if data := response.data:
-                        LOGGER.debug(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
-                        await self.raw_audio_to_play_queue.put(bytes(data))
-                    elif text := response.text:
-                        LOGGER.debug(f"Gemini: {text}")
-                    elif go_away := response.go_away:
-                        raise TimeoutError(f"Gemini session timeout: {go_away.time_left}")
-                    
-                    if response.session_resumption_update:
-                        update = response.session_resumption_update
-                        if update.resumable and update.new_handle:
-                            self.session_handle = update.new_handle
-
-                    # The model might generate and execute Python code to use Search
-                    if response.server_content:
-                        if model_turn := response.server_content.model_turn:
-                            for part in model_turn.parts:
-                                if part.executable_code:
-                                    LOGGER.debug("Code: %s", part.executable_code.code)
-                                elif part.code_execution_result:
-                                    LOGGER.debug("Code: %s", part.code_execution_result.output)
-                                        
-                        if response.server_content.interrupted is self.interrupt_enabled:
-                            LOGGER.debug("VAD Interrupting.")
-                            while not self.raw_audio_to_play_queue.empty():
-                                self.raw_audio_to_play_queue.get_nowait()
-                            while not self.audio_playback_queue.empty():
-                                self.audio_playback_queue.get_nowait()
-                                    
-                    elif response.tool_call:
-                        function_responses = []
-                        for fc in response.tool_call.function_calls:
-
-                            if fc.name == "turn_on_the_lights":
-                                result = turn_on_light()
-                            elif fc.name == "turn_off_the_lights":
-                                result = turn_off_light()
-                            elif fc.name == "good_bye":
-                                self.is_wake.clear()
-                                result = True
-                                self.last_wake_time = asyncio.get_event_loop().time() # Reset last wake time
-                            else:
-                                result = {"error": f"Unknown function: {fc.name}"}
-
-                            function_response = types.FunctionResponse(
-                                id=fc.id,
-                                name=fc.name,
-                                response={ "result": result}  
-                            )
-                            function_responses.append(function_response)
-
-                        await self.session.send_tool_response(function_responses=function_responses)
-
-                    if response.server_content and response.server_content.turn_complete:
-                        break
-                        
-        except asyncio.CancelledError:
-            LOGGER.debug("Receive_from_gemini_task cancelled.")
-        except Exception as e:
-            LOGGER.error(f"Error in receive_from_gemini_task: {e}")
-            raise
-
+            pass
 
     async def _send_to_gemini_task(self, track):
         resampler = AudioResampler(format="s16", layout="mono", rate=GEMINI_SAMPLE_RATE)
-        
+        utterance_frames = []
+        speech_samples = 0
+        silence_samples = 0
+        active_samples = 0
+        silence_limit = int(GEMINI_SAMPLE_RATE * SILENCE_DURATION_SECONDS)
+
+        async def finish_utterance():
+            nonlocal utterance_frames, speech_samples, silence_samples, active_samples
+            if utterance_frames:
+                captured = np.concatenate(utterance_frames).astype(np.int16)
+                if speech_samples >= int(GEMINI_SAMPLE_RATE * MIN_SPEECH_SECONDS):
+                    LOGGER.info("Speech ended; playing processing cue for %s", self.remote_user_id)
+                    await self.raw_audio_to_play_queue.put(
+                        self._make_processing_sound()
+                    )
+                    await self._process_utterance(captured.tobytes())
+                else:
+                    LOGGER.info("Wake word heard but no request speech was captured")
+            self.is_wake.clear()
+            utterance_frames = []
+            speech_samples = silence_samples = active_samples = 0
+            self.wake_buffer = np.array([], dtype=np.int16)
+
         try:
             while True:
-                frame = await track.recv()
-                resampled_frames = resampler.resample(frame)
+                try:
+                    frame = await asyncio.wait_for(
+                        track.recv(), timeout=SILENCE_DURATION_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    if self.is_wake.is_set():
+                        LOGGER.info(
+                            "No incoming audio frames for %.1f seconds; ending utterance",
+                            SILENCE_DURATION_SECONDS,
+                        )
+                        silence_samples = max(silence_samples, silence_limit)
+                        await finish_utterance()
+                    continue
 
-                for r_frame in resampled_frames:
-                    audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
-
+                for converted in resampler.resample(frame):
+                    samples = converted.to_ndarray().astype(np.int16).reshape(-1)
                     if not self.is_wake.is_set():
-                        # Accumulate audio until we have at least 400 samples
-                        self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
-
+                        self.wake_buffer = np.concatenate((self.wake_buffer, samples))
                         while len(self.wake_buffer) >= WAKE_BUFFER:
                             chunk = self.wake_buffer[:WAKE_BUFFER]
                             self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
-
-                            prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
-                            for mdl, scores in self.wakeword_model.prediction_buffer.items():
-                                if scores[-1] > WAKE_THRESHOLD:   
-                                    LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
+                            await asyncio.to_thread(self.wakeword_model.predict, chunk)
+                            detected = any(
+                                len(scores) > 0 and scores[-1] > WAKE_THRESHOLD
+                                for scores in self.wakeword_model.prediction_buffer.values()
+                            )
+                            if detected:
+                                now = asyncio.get_running_loop().time()
+                                if now - self.last_wake_time >= DEBOUNCE_TIME:
+                                    LOGGER.info("Wake word detected for %s", self.remote_user_id)
+                                    self.is_wake.set()
+                                    self.last_wake_time = now
                                     self.wakeword_model.prediction_buffer.clear()
-                                    self.wake_buffer = np.array([], dtype=np.int16)
-                                    current_time = asyncio.get_event_loop().time()
-                                    if current_time - self.last_wake_time > DEBOUNCE_TIME:  # Debounce for 2 seconds
-                                        self.is_wake.set()
-                                        self.last_wake_time = current_time
-                                    else:
-                                        LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
+                                    self.raw_audio_to_play_queue.put_nowait(
+                                        self._make_wake_confirmation_sound()
+                                    )
+                                    utterance_frames = [samples]
+                                    active_samples = len(samples)
                                     break
+                                LOGGER.debug("Ignoring debounced wake word")
+                    if not self.is_wake.is_set():
+                        continue
 
-                            if self.is_wake.is_set():
-                                break
+                    if not utterance_frames:
+                        utterance_frames.append(samples)
+                    elif utterance_frames[-1] is not samples:
+                        utterance_frames.append(samples)
+
+                    frame_rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+                    frame_samples = len(samples)
+                    active_samples += frame_samples
+                    if frame_rms >= SPEECH_THRESHOLD:
+                        speech_samples += frame_samples
+                        silence_samples = 0
                     else:
-                        # Send raw audio to Gemini once wake word detected
-                        audio_bytes = audio_np.tobytes()
-                        await self.session.send(
-                            input={"data": audio_bytes, "mime_type": "audio/pcm"}
-                        )
+                        silence_samples += frame_samples
 
+                    no_speech_limit = int(GEMINI_SAMPLE_RATE * NO_SPEECH_TIMEOUT_SECONDS)
+                    max_utterance = int(GEMINI_SAMPLE_RATE * MAX_UTTERANCE_SECONDS)
+                    if (
+                        silence_samples >= silence_limit
+                        or active_samples >= max_utterance
+                        or (speech_samples == 0 and active_samples >= no_speech_limit)
+                    ):
+                        await finish_utterance()
         except MediaStreamError:
-            LOGGER.debug("User audio track ended.")
+            LOGGER.info("User audio track ended")
         except asyncio.CancelledError:
-            LOGGER.debug("Send_to_gemini_task cancelled.")
-        except Exception as e:
-            LOGGER.error(f"Error in send_to_gemini_task: {e}")
-            raise
+            pass
+
+    async def _process_utterance(self, pcm_audio):
+        wav_audio = self._pcm_to_wav(pcm_audio, GEMINI_SAMPLE_RATE)
+        self._save_debug_audio(wav_audio)
+        LOGGER.info("Sending %d bytes of voice input to Gemini", len(wav_audio))
+        try:
+            text, should_sleep = await asyncio.to_thread(self._request_response, wav_audio)
+            if not text:
+                LOGGER.info("Gemini returned no speech text")
+                return
+            LOGGER.info("Gemini response [%s]: %s", self.remote_user_id, text)
+            speech_pcm = await asyncio.to_thread(self._synthesize_speech, text)
+            if speech_pcm:
+                await self.raw_audio_to_play_queue.put(speech_pcm)
+            if should_sleep:
+                self.is_wake.clear()
+        except Exception:
+            LOGGER.exception("Failed to process voice request for %s", self.remote_user_id)
+            try:
+                error_pcm = await asyncio.to_thread(
+                    self._synthesize_speech,
+                    "I couldn't get a response from Gemini. Please check the API quota.",
+                )
+                if error_pcm:
+                    await self.raw_audio_to_play_queue.put(error_pcm)
+            except Exception:
+                LOGGER.exception("Could not play the local Gemini error message")
+
+    def _save_debug_audio(self, wav_audio):
+        """Save a captured utterance when debug audio capture is enabled."""
+        debug_dir = os.getenv("GEMINI_DEBUG_AUDIO_DIR")
+        if not debug_dir:
+            return
+
+        safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(self.remote_user_id))
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+        audio_path = Path(debug_dir) / f"utterance_{safe_user_id}_{timestamp}.wav"
+        try:
+            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            audio_path.write_bytes(wav_audio)
+            LOGGER.info("Saved debug voice input to %s", audio_path)
+        except OSError:
+            LOGGER.exception("Could not save debug audio to %s", audio_path)
+
+    def _request_response(self, wav_audio):
+        audio_input = {
+            "type": "audio",
+            "data": base64.b64encode(wav_audio).decode("ascii"),
+            "mime_type": "audio/wav",
+        }
+        request = {
+            "model": CONF_CHAT_MODEL,
+            "input": [
+                {"type": "text", "text": "Listen to the user's speech and respond to their request."},
+                audio_input,
+            ],
+            "system_instruction": GEMINI_SYSTEM_PROMPT,
+            "tools": GEMINI_TOOLS,
+        }
+        if self.interaction_id:
+            request["previous_interaction_id"] = self.interaction_id
+        interaction = self.client.interactions.create(**request)
+
+        should_sleep = False
+        for _ in range(MAX_TOOL_ROUNDS):
+            calls = [step for step in interaction.steps if step.type == "function_call"]
+            if not calls:
+                break
+            results = []
+            for call in calls:
+                if call.name == "turn_on_the_lights":
+                    result = turn_on_light()
+                elif call.name == "turn_off_the_lights":
+                    result = turn_off_light()
+                elif call.name == "good_bye":
+                    should_sleep = True
+                    result = {"success": True, "status": "wake-word standby"}
+                else:
+                    result = {"error": f"Unknown function: {call.name}"}
+                results.append(
+                    {
+                        "type": "function_result",
+                        "name": call.name,
+                        "call_id": call.id,
+                        "result": [{"type": "text", "text": json.dumps(result)}],
+                    }
+                )
+            interaction = self.client.interactions.create(
+                model=CONF_CHAT_MODEL,
+                input=results,
+                system_instruction=GEMINI_SYSTEM_PROMPT,
+                tools=GEMINI_TOOLS,
+                previous_interaction_id=interaction.id,
+            )
+
+        self.interaction_id = interaction.id
+        return interaction.output_text or "", should_sleep
+
+    @staticmethod
+    def _pcm_to_wav(pcm, sample_rate):
+        import io
+
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _make_wake_confirmation_sound():
+        """Create a short confirmation beep for playback over the WebRTC call."""
+        sample_count = int(GEMINI_WEBRTC_SAMPLE_RATE * WAKE_CUE_DURATION_SECONDS)
+        time = np.arange(sample_count, dtype=np.float32) / GEMINI_WEBRTC_SAMPLE_RATE
+        envelope = np.ones(sample_count, dtype=np.float32)
+        fade_samples = min(int(GEMINI_WEBRTC_SAMPLE_RATE * 0.008), sample_count // 2)
+        fade = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+        envelope[:fade_samples] = fade
+        envelope[-fade_samples:] = fade[::-1]
+        tone = 0.18 * 32767 * envelope * np.sin(
+            2 * np.pi * WAKE_CUE_FREQUENCY * time
+        )
+        return tone.astype("<i2").tobytes()
+
+    @staticmethod
+    def _make_processing_sound():
+        """Create a two-tone cue confirming speech capture has ended."""
+        sample_rate = GEMINI_WEBRTC_SAMPLE_RATE
+        tone_samples = int(sample_rate * PROCESSING_CUE_TONE_SECONDS)
+        fade_samples = min(int(sample_rate * 0.008), tone_samples // 2)
+        envelope = np.ones(tone_samples, dtype=np.float32)
+        fade = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+        envelope[:fade_samples] = fade
+        envelope[-fade_samples:] = fade[::-1]
+        time = np.arange(tone_samples, dtype=np.float32) / sample_rate
+        tones = [
+            (0.18 * 32767 * envelope * np.sin(2 * np.pi * frequency * time))
+            .astype("<i2")
+            .tobytes()
+            for frequency in PROCESSING_CUE_FREQUENCIES
+        ]
+        silence = np.zeros(
+            int(sample_rate * PROCESSING_CUE_GAP_SECONDS), dtype="<i2"
+        ).tobytes()
+        return silence.join(tones)
+
+    @staticmethod
+    def _synthesize_speech(text):
+        """Prefer the local Piper voice, then fall back to pyttsx3 and gTTS."""
+        output_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output:
+                output_path = output.name
+            from piper import PiperVoice
+
+            global _PIPER_VOICE
+            if _PIPER_VOICE is None:
+                with _PIPER_VOICE_LOCK:
+                    if _PIPER_VOICE is None:
+                        voice_path = Path(os.getenv(
+                            "PIPER_VOICE_PATH",
+                            str(Path.home() / ".local/share/piper/voices/en_US-lessac-medium.onnx"),
+                        ))
+                        if not voice_path.is_file():
+                            raise FileNotFoundError(f"Piper voice model not found: {voice_path}")
+                        _PIPER_VOICE = PiperVoice.load(voice_path)
+            with wave.open(output_path, "wb") as wav_file:
+                _PIPER_VOICE.synthesize_wav(text, wav_file)
+        except Exception as piper_error:
+            LOGGER.warning("Piper TTS unavailable (%s); falling back to pyttsx3", piper_error)
+            try:
+                import pyttsx3
+
+                engine = pyttsx3.init()
+                try:
+                    engine.setProperty("rate", 180)
+                    engine.save_to_file(text, output_path)
+                    engine.runAndWait()
+                finally:
+                    engine.stop()
+            except Exception as local_tts_error:
+                LOGGER.warning("Local pyttsx3 unavailable (%s); using gTTS fallback", local_tts_error)
+                from gtts import gTTS
+
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as output:
+                    output_path = output.name
+                gTTS(text=text, lang="en").save(output_path)
+
+        try:
+            pcm_frames = []
+            with av.open(output_path) as container:
+                resampler = AudioResampler(
+                    format="s16", layout="mono", rate=GEMINI_WEBRTC_SAMPLE_RATE
+                )
+                for decoded in container.decode(audio=0):
+                    for converted in resampler.resample(decoded):
+                        pcm_frames.append(converted.to_ndarray().astype(np.int16).tobytes())
+                for converted in resampler.resample(None):
+                    pcm_frames.append(converted.to_ndarray().astype(np.int16).tobytes())
+            return b"".join(pcm_frames)
+        finally:
+            if output_path and os.path.exists(output_path):
+                os.unlink(output_path)

@@ -1,7 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   package="com.webrtcexample">
 
-    <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.camera" />
     <uses-feature android:name="android.hardware.camera.autofocus" />
     <uses-feature android:name="android.hardware.audio.output" />
@@ -22,6 +21,7 @@
       android:icon="@mipmap/ic_launcher"
       android:roundIcon="@mipmap/ic_launcher_round"
       android:allowBackup="false"
+      android:usesCleartextTraffic="true"
       android:theme="@style/AppTheme">
       <activity
         android:name=".MainActivity"

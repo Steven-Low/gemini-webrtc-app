@@ -35,20 +35,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCallerId } from './Session';
 
 const { width } = Dimensions.get('window');
+const DEFAULT_SOCKET_ADDRESS = 'http://10.10.10.116:3500';
 
 export default function App({}) {
   const [localStream, setlocalStream] = useState(null);
+  const localStreamRef = useRef(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [type, setType] = useState('JOIN');
   const socketRef = useRef(null);
-  const [socketAddress, setSocketAddress] = useState('http://10.10.10.124:3500');
+  const [socketAddress, setSocketAddress] = useState(DEFAULT_SOCKET_ADDRESS);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [otherUserId, setOtherUserId] = useState(null);       // fOR SYNCRHONOUS SHXT (UI)
   const otherUserIdRef = useRef(otherUserId);                 // fOR ASYNCRONOUSE SHXT (RTC)
   const [localMicOn, setlocalMicOn] = useState(true);
   const [localWebcamOn, setlocalWebcamOn] = useState(false);  // Default video off
   const appState = useRef(AppState.currentState);
-  const [callerId, setCallerId] = useState("111111");
+  const [callerId, setCallerId] = useState(null);
   const [resetNonce, setResetNonce] = useState(0);
   const peerConnectionRef = useRef(null);
   let remoteRTCMessage = useRef(null);
@@ -59,7 +61,18 @@ export default function App({}) {
       try {
         const savedAddress = await AsyncStorage.getItem('SOCKET_ADDRESS');
         if (savedAddress) {
-          setSocketAddress(savedAddress);
+          // Migrate the previous default address; retaining it would silently
+          // override the corrected default after an app update.
+          const previousDefaults = [
+            'http://10.10.10.121:3500',
+            'http://10.10.10.124:3500',
+          ];
+          if (previousDefaults.includes(savedAddress)) {
+            await AsyncStorage.setItem('SOCKET_ADDRESS', DEFAULT_SOCKET_ADDRESS);
+            setSocketAddress(DEFAULT_SOCKET_ADDRESS);
+          } else {
+            setSocketAddress(savedAddress);
+          }
         }
 
         const savedCallerId = await AsyncStorage.getItem('SAVED_CALLER_ID');
@@ -148,6 +161,7 @@ export default function App({}) {
       ],
     });
     peerConnectionRef.current = pc;
+    let disposed = false;
 
     const socket = SocketIOClient(socketAddress, {
       transports: ['websocket'], 
@@ -171,15 +185,17 @@ export default function App({}) {
       }
     };
 
-    pc.onconnectionstatechange = event => {
+    pc.onconnectionstatechange = () => {
       if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
         console.log("Connection: " + pc.connectionState)
-        leave(false);
+        if (!disposed && peerConnectionRef.current === pc) {
+          leave(false);
+        }
       }
     }
 
     // Media Device Setup
-    mediaDevices.enumerateDevices().then(sourceInfos => {
+    mediaDevices.enumerateDevices().then(async sourceInfos => {
         let videoSourceId;
         for (let i = 0; i < sourceInfos.length; i++) {
           const sourceInfo = sourceInfos[i];
@@ -191,7 +207,7 @@ export default function App({}) {
           }
         }
   
-        mediaDevices.getUserMedia({
+        const stream = await mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
               noiseSuppression: true,
@@ -202,22 +218,30 @@ export default function App({}) {
               facingMode: 'user',
               optional: videoSourceId ? [{sourceId: videoSourceId}] : [],
             },
-          })
-          .then(stream => {
-            if (!localWebcamOn){
-              stream.getVideoTracks().forEach(track => (track.enabled = false));
-            }
-            setlocalStream(stream);
-            if (peerConnectionRef.current) {
-                peerConnectionRef.current.addStream(stream);
-            }
           });
+        if (disposed) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        if (!localWebcamOn) {
+          stream.getVideoTracks().forEach(track => (track.enabled = false));
+        }
+        localStreamRef.current = stream;
+        setlocalStream(stream);
+        pc.addStream(stream);
+      }).catch(error => {
+        if (!disposed) {
+          console.warn('Failed to initialize local media:', error.message || error);
+        }
       });
 
     // Socket Listeners
     socket.on("connect", () => {
-      console.log("Connected!", socket.id);
-      console.log(socketRef.current)
+      console.log("Connected to signaling server", socket.id);
+    });
+
+    socket.on("connect_error", error => {
+      console.warn(`Signaling connection failed at ${socketAddress}:`, error.message);
     });
 
     socket.on('newCall', data => {
@@ -244,7 +268,7 @@ export default function App({}) {
     });
 
     socket.on('callEnded', data => {
-      if (data.targetId === callerId) {
+      if (data.senderId) {
         leave(false);
       }
     });
@@ -258,6 +282,7 @@ export default function App({}) {
     // --- 4. Return the Master Cleanup Function ---
     // This runs when the component unmounts OR when socketAddress/callerId changes.
     return () => {
+      disposed = true;
       console.log("--- Tearing down old connections ---");
       if (socketRef.current) {
         socketRef.current.disconnect();
@@ -267,6 +292,11 @@ export default function App({}) {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
       }
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      setlocalStream(null);
     };
   }, [socketAddress, callerId, resetNonce]);
 
@@ -329,8 +359,10 @@ export default function App({}) {
     }
     
     // 2. Close the current peer connection
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
+    const peerConnection = peerConnectionRef.current;
+    peerConnectionRef.current = null;
+    if (peerConnection) {
+      peerConnection.close();
     }
     
     // 3. Reset the UI state to go back to the join screen
@@ -565,21 +597,23 @@ export default function App({}) {
   };
 
   function switchCamera() {
-    localStream.getVideoTracks().forEach(track => {
+    localStreamRef.current?.getVideoTracks().forEach(track => {
       track._switchCamera();
     });
   }
 
   function toggleCamera() {
+    if (!localStreamRef.current) return;
     localWebcamOn ? setlocalWebcamOn(false) : setlocalWebcamOn(true);
-    localStream.getVideoTracks().forEach(track => {
+    localStreamRef.current.getVideoTracks().forEach(track => {
       localWebcamOn ? (track.enabled = false) : (track.enabled = true);
     });
   }
 
   function toggleMic() {
+    if (!localStreamRef.current) return;
     localMicOn ? setlocalMicOn(false) : setlocalMicOn(true);
-    localStream.getAudioTracks().forEach(track => {
+    localStreamRef.current.getAudioTracks().forEach(track => {
       localMicOn ? (track.enabled = false) : (track.enabled = true);
     });
   }

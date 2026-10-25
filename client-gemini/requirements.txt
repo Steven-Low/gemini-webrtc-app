@@ -1,4 +1,4 @@
-google-genai
+google-genai>=2.30.1
 aiortc
 av
 numpy
@@ -7,3 +7,6 @@ python-socketio
 dotenv
 aiohttp
 openwakeword
+pyttsx3
+piper-tts>=1.8.0
+gTTS

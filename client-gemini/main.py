@@ -2,12 +2,15 @@
 import asyncio
 import logging
 import argparse
+import os
 import sys
 from dotenv import load_dotenv
 from pathlib import Path
-from app.app import GeminiApp
 
 sys.path.append(str(Path(__file__).resolve().parent))
+load_dotenv(Path(__file__).resolve().with_name(".env"))
+
+from app.app import GeminiApp
 
 def setup_logger(debug: bool):
     logging.basicConfig(
@@ -26,11 +29,18 @@ def setup_logger(debug: bool):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for app only")
+    parser.add_argument(
+        "--debug-audio",
+        action="store_true",
+        help="Save each captured user utterance as a WAV in client-gemini/debug_audio",
+    )
     args = parser.parse_args()
+
+    if args.debug_audio:
+        os.environ["GEMINI_DEBUG_AUDIO_DIR"] = str(Path(__file__).resolve().parent / "debug_audio")
 
     LOGGER = setup_logger(args.debug)
 
-    load_dotenv()
     app = GeminiApp()
 
     LOGGER.info("Starting Application...")

@@ -96,10 +96,23 @@ npm run start
 ---
 
 ### Gemini Client Setup
-#### Step 1: Go to client-python folder
+#### Step 1: Go to the Gemini client folder
 ```js
-cd gemini-webrtc-app/client-python
+cd gemini-webrtc-app/client-gemini
 ```
+
+The Gemini voice client now sends each wake-word-triggered spoken request to
+`gemini-3.5-flash-lite` through the Interactions API. Replies use local
+`pyttsx3` voices when an OS speech engine is available, then fall back to
+`gTTS` if needed. Neither path uses Gemini TTS or Gemini TTS tokens. The gTTS
+fallback requires internet access and sends reply text to Google's Translate
+speech endpoint. On Linux, install eSpeak for offline voice synthesis:
+
+```sh
+sudo apt install espeak-ng
+```
+
+On macOS and Windows, `pyttsx3` uses the platform's native speech engine.
 
 #### Step 2: Create & activate virtual python environment
 ```
@@ -163,4 +176,3 @@ adb devices
 npm run android
 npm run ios
 ```
-
